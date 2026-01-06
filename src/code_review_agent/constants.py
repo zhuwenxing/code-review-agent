@@ -34,3 +34,7 @@ ENV_VARS_TO_PASS = [
 
 # Default timeout for LLM queries (in seconds)
 DEFAULT_LLM_TIMEOUT = 300
+
+# Maximum concurrent chunk reviews per file
+# Limited to avoid overwhelming LLM API rate limits when processing large files
+MAX_CONCURRENT_CHUNK_REVIEWS = 3

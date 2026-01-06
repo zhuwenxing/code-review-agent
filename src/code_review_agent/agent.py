@@ -12,7 +12,12 @@ from typing import Optional
 
 import aiofiles
 
-from .constants import DEFAULT_CHUNK_LINES, DEFAULT_LARGE_FILE_LINES, ENV_VARS_TO_PASS
+from .constants import (
+    DEFAULT_CHUNK_LINES,
+    DEFAULT_LARGE_FILE_LINES,
+    ENV_VARS_TO_PASS,
+    MAX_CONCURRENT_CHUNK_REVIEWS,
+)
 from .gitignore import GitignoreParser
 from .llm import create_agent, LLMAgent
 from .progress import ReviewStats, ProgressDisplay
@@ -272,16 +277,13 @@ class CodeReviewAgent:
         skipped_count = 0
 
         for file_path in all_files:
-            should_review, reason, content_hash = self.state_manager.should_review_file(
+            # Get hash and line count in a single file read to avoid redundant I/O
+            should_review, reason, content_hash, lines = self.state_manager.should_review_file(
                 file_path, force=self.force_full
             )
             if should_review:
                 files_to_review.append(str(file_path))
-                # Register file in state, reusing the already computed hash
-                try:
-                    lines = len(file_path.read_text(encoding="utf-8", errors="replace").splitlines())
-                except Exception:
-                    lines = 0
+                # Register file in state, reusing the already computed hash and line count
                 self.state_manager.register_file(file_path, lines, content_hash)
             else:
                 skipped_count += 1
@@ -424,8 +426,8 @@ class CodeReviewAgent:
         if self.progress:
             await self.progress.log(f"  Large file ({total_lines} lines) -> {len(chunks)} chunks")
 
-        # Use semaphore to limit concurrent chunk reviews (max 3 concurrent chunks)
-        chunk_semaphore = asyncio.Semaphore(min(3, self.concurrency))
+        # Use semaphore to limit concurrent chunk reviews to avoid LLM rate limits
+        chunk_semaphore = asyncio.Semaphore(min(MAX_CONCURRENT_CHUNK_REVIEWS, self.concurrency))
 
         async def review_chunk_with_semaphore(idx: int, content: str, start: int, end: int) -> tuple[int, str]:
             async with chunk_semaphore:

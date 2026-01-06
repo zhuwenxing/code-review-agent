@@ -84,16 +84,37 @@ class ReviewStateManager:
 
         Reads file in 64KB chunks to avoid memory issues with large files.
         """
+        content_hash, _ = self._compute_file_hash_and_lines(file_path)
+        return content_hash
+
+    def _compute_file_hash_and_lines(self, file_path: Path) -> tuple[str, int]:
+        """Compute SHA256 hash and line count in a single file read.
+
+        Reads file in 64KB chunks to avoid memory issues with large files.
+        Counts newlines during the hash computation to avoid redundant I/O.
+
+        Returns:
+            Tuple of (content_hash, line_count). Returns ("", 0) on error.
+        """
         try:
             sha256_hash = hashlib.sha256()
+            line_count = 0
             with open(file_path, "rb") as f:
                 # Read in 64KB chunks to avoid loading entire file into memory
                 while chunk := f.read(65536):
                     sha256_hash.update(chunk)
-            return sha256_hash.hexdigest()
-        except Exception as e:
+                    # Count newlines in this chunk
+                    line_count += chunk.count(b'\n')
+            # Add 1 for files that don't end with newline but have content
+            if line_count == 0:
+                # Check if file has any content
+                file_path_stat = file_path.stat()
+                if file_path_stat.st_size > 0:
+                    line_count = 1
+            return sha256_hash.hexdigest(), line_count
+        except (IOError, OSError) as e:
             logger.warning(f"Failed to hash {file_path}: {e}")
-            return ""
+            return "", 0
 
     def load_state(self) -> Optional[ReviewSessionState]:
         """Load existing state from file if available."""
@@ -143,7 +164,7 @@ class ReviewStateManager:
         )
         return self.state
 
-    def should_review_file(self, file_path: Path, force: bool = False) -> tuple[bool, str, str]:
+    def should_review_file(self, file_path: Path, force: bool = False) -> tuple[bool, str, str, int]:
         """Check if a file should be reviewed.
 
         Args:
@@ -151,40 +172,40 @@ class ReviewStateManager:
             force: If True, always review regardless of state
 
         Returns:
-            Tuple of (should_review, reason, content_hash)
-            The content_hash can be reused by register_file to avoid duplicate I/O.
+            Tuple of (should_review, reason, content_hash, line_count)
+            The content_hash and line_count can be reused by register_file to avoid duplicate I/O.
         """
         if force:
-            current_hash = self._compute_file_hash(file_path)
-            return True, "forced", current_hash
+            current_hash, lines = self._compute_file_hash_and_lines(file_path)
+            return True, "forced", current_hash, lines
 
         if not self.state:
-            current_hash = self._compute_file_hash(file_path)
-            return True, "no_state", current_hash
+            current_hash, lines = self._compute_file_hash_and_lines(file_path)
+            return True, "no_state", current_hash, lines
 
         rel_path = str(file_path.relative_to(self.root_path))
-        current_hash = self._compute_file_hash(file_path)
+        current_hash, lines = self._compute_file_hash_and_lines(file_path)
 
         if rel_path not in self.state.files:
-            return True, "new_file", current_hash
+            return True, "new_file", current_hash, lines
 
         file_state = self.state.files[rel_path]
 
         # Check if file content changed
         if file_state.content_hash != current_hash:
-            return True, "content_changed", current_hash
+            return True, "content_changed", current_hash, lines
 
         # Check if previous review was successful
         if file_state.status == "completed":
-            return False, "unchanged", current_hash
+            return False, "unchanged", current_hash, lines
 
         if file_state.status == "error":
-            return True, "retry_error", current_hash
+            return True, "retry_error", current_hash, lines
 
         if file_state.status == "in_progress":
-            return True, "incomplete", current_hash
+            return True, "incomplete", current_hash, lines
 
-        return True, "unknown_status", current_hash
+        return True, "unknown_status", current_hash, lines
 
     def register_file(self, file_path: Path, lines: int = 0, content_hash: str = ""):
         """Register a file for review.

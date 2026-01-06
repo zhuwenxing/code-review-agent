@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from . import __version__
 from .agent import CodeReviewAgent
 from .constants import (
     DEFAULT_CHUNK_LINES,
@@ -86,7 +87,7 @@ from .constants import (
     is_flag=True,
     help="Enable debug mode with full stack traces"
 )
-@click.version_option(version="0.3.0", prog_name="code-review")
+@click.version_option(version=__version__, prog_name="code-review")
 def main(
     path: Path,
     extensions: str,
@@ -184,11 +185,10 @@ async def async_main(
         force_full=force_full,
         resume=resume,
     )
-    result = await agent.run()
-    # Return True if we got a result path (success), even if no files needed review
-    # Empty string means no files to review (which is still success)
-    # This ensures that "no files changed" is treated as success (exit 0)
-    return True  # If we reach here without exception, it's success
+    await agent.run()
+    # Return True if agent.run() completes without exception (success)
+    # This ensures that "no files changed" is also treated as success (exit 0)
+    return True
 
 
 if __name__ == "__main__":
