@@ -72,11 +72,21 @@ from .constants import (
     help="LLM agent to use for code review (default: claude)"
 )
 @click.option(
+    "--force-full",
+    is_flag=True,
+    help="Force full review, ignoring previous state (disables incremental mode)"
+)
+@click.option(
+    "--no-resume",
+    is_flag=True,
+    help="Don't resume from previous session, start fresh"
+)
+@click.option(
     "--debug",
     is_flag=True,
     help="Enable debug mode with full stack traces"
 )
-@click.version_option(version="0.2.0", prog_name="code-review")
+@click.version_option(version="0.3.0", prog_name="code-review")
 def main(
     path: str,
     extensions: str,
@@ -88,11 +98,20 @@ def main(
     large_file_threshold: int,
     skip_explore: bool,
     agent: str,
+    force_full: bool,
+    no_resume: bool,
     debug: bool,
 ) -> None:
-    """Code Review Agent - Explores codebase and reviews with specific rules.
+    """Code Review Agent - Intelligent code review with incremental support.
 
     PATH: Directory to review
+
+    Features:
+
+    \b
+    - Incremental reviews: Only reviews files that changed since last run
+    - Resumable: Continue from where you left off after interruption
+    - Hierarchical output: Reviews saved in same directory structure as source
     """
     try:
         # Parse extensions
@@ -113,6 +132,8 @@ def main(
                 large_file_threshold=large_file_threshold,
                 skip_explore=skip_explore,
                 agent_type=agent,
+                force_full=force_full,
+                resume=not no_resume,
             )
         )
         sys.exit(0 if result else 1)
@@ -140,6 +161,8 @@ async def async_main(
     large_file_threshold: int,
     skip_explore: bool,
     agent_type: str,
+    force_full: bool,
+    resume: bool,
 ) -> str:
     """Async main function."""
     agent = CodeReviewAgent(
@@ -153,6 +176,8 @@ async def async_main(
         large_file_threshold=large_file_threshold,
         skip_explore=skip_explore,
         agent_type=agent_type,
+        force_full=force_full,
+        resume=resume,
     )
     return await agent.run()
 
