@@ -70,8 +70,8 @@ from .constants import (
     "-a",
     "--agent",
     type=click.Choice(["claude", "gemini"], case_sensitive=False),
-    default="claude",
-    help="LLM agent to use for code review (default: claude)",
+    default="gemini",
+    help="LLM agent to use for code review (default: gemini)",
 )
 @click.option(
     "--force-full", is_flag=True, help="Force full review, ignoring previous state (disables incremental mode)"

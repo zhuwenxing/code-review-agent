@@ -35,14 +35,14 @@ uv pip install -e .
 ### 基本用法
 
 ```bash
-# 审查当前目录（使用 Claude，默认）
+# 审查当前目录（使用 Gemini，默认）
 code-review-agent
 
 # 审查指定目录
 code-review-agent /path/to/your/code
 
-# 使用 Gemini 进行审查
-code-review-agent --agent gemini
+# 使用 Claude 进行审查
+code-review-agent --agent claude
 ```
 
 ### 增量审查
@@ -64,7 +64,7 @@ code-review-agent --no-resume
 
 ```bash
 code-review-agent /path/to/code \
-  --agent claude \
+  --agent gemini \
   --extensions py,go,js,ts \
   --output-dir reviews \
   --concurrency 10 \
@@ -78,7 +78,7 @@ code-review-agent /path/to/code \
 | 参数 | 简写 | 默认值 | 说明 |
 |------|------|--------|------|
 | `path` | - | 当前目录 | 要审查的目录路径 |
-| `--agent` | `-a` | `claude` | LLM 引擎：`claude` 或 `gemini` |
+| `--agent` | `-a` | `gemini` | LLM 引擎：`claude` 或 `gemini` |
 | `--extensions` | `-e` | `py,go,js,ts,java,cpp,c,h` | 要审查的文件扩展名 |
 | `--output-dir` | `-o` | `reviews` | 审查报告输出目录 |
 | `--max-files` | `-m` | 无限制 | 最大审查文件数量 |
