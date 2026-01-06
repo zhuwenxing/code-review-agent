@@ -146,15 +146,21 @@ This tool fully supports `.gitignore` syntax:
 
 Implemented using `pathspec` library, matching Git's behavior exactly.
 
-## Environment Variables
+## Prerequisites
 
-Set the appropriate environment variables based on your chosen LLM engine:
+You need to install and authenticate the corresponding CLI tool based on your chosen LLM engine:
 
 ### Claude
-- `ANTHROPIC_API_KEY` - Anthropic API key
+
+1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+2. Run `claude` command to complete authentication
 
 ### Gemini
-- `GOOGLE_API_KEY` or `GEMINI_API_KEY` - Google API key
+
+1. Install [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+2. Run `gemini` command to complete authentication
+
+> **Note**: This tool performs code reviews by invoking locally installed CLI tools. Please ensure the corresponding CLI tool is properly installed and authenticated.
 
 ## Dependencies
 

@@ -146,15 +146,21 @@ reviews/
 
 使用 `pathspec` 库实现，与 Git 行为完全一致。
 
-## 环境变量
+## 前置要求
 
-根据选择的 LLM 引擎，需要设置相应的环境变量：
+根据选择的 LLM 引擎，需要在本地安装并登录相应的 CLI 工具：
 
 ### Claude
-- `ANTHROPIC_API_KEY` - Anthropic API 密钥
+
+1. 安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+2. 运行 `claude` 命令完成登录认证
 
 ### Gemini
-- `GOOGLE_API_KEY` 或 `GEMINI_API_KEY` - Google API 密钥
+
+1. 安装 [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+2. 运行 `gemini` 命令完成登录认证
+
+> **注意**：本工具通过调用本地已安装的 CLI 工具进行代码审查，请确保对应的 CLI 工具已正确安装并完成认证。
 
 ## 依赖项
 
