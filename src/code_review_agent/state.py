@@ -102,18 +102,20 @@ class ReviewStateManager:
         try:
             sha256_hash = hashlib.sha256()
             line_count = 0
+            file_size = 0
+            ends_with_newline = False
             async with aiofiles.open(file_path, "rb") as f:
                 # Read in 64KB chunks to avoid loading entire file into memory
                 while chunk := await f.read(65536):
+                    file_size += len(chunk)
                     sha256_hash.update(chunk)
                     # Count newlines in this chunk
                     line_count += chunk.count(b"\n")
-            # Add 1 for files that don't end with newline but have content
-            if line_count == 0:
-                # Check if file has any content
-                file_path_stat = file_path.stat()
-                if file_path_stat.st_size > 0:
-                    line_count = 1
+                    if chunk:
+                        ends_with_newline = chunk.endswith(b"\n")
+            # If file is not empty and doesn't end with newline, the last line was not counted
+            if file_size > 0 and not ends_with_newline:
+                line_count += 1
             return sha256_hash.hexdigest(), line_count
         except OSError as e:
             logger.warning(f"Failed to hash {file_path}: {e}")

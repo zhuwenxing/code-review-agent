@@ -71,7 +71,7 @@ from .constants import (
 @click.option(
     "--force-full", is_flag=True, help="Force full review, ignoring previous state (disables incremental mode)"
 )
-@click.option("--no-resume", is_flag=True, help="Don't resume from previous session, start fresh")
+@click.option("--resume/--no-resume", "resume", default=True, help="Enable/disable resuming from previous session")
 @click.option("--debug", is_flag=True, help="Enable debug mode with full stack traces")
 @click.version_option(version=__version__, prog_name="code-review")
 def main(
@@ -86,7 +86,7 @@ def main(
     skip_explore: bool,
     agent: str,
     force_full: bool,
-    no_resume: bool,
+    resume: bool,
     debug: bool,
 ) -> None:
     """Code Review Agent - Intelligent code review with incremental support.
@@ -120,7 +120,7 @@ def main(
                 skip_explore=skip_explore,
                 agent_type=agent,
                 force_full=force_full,
-                resume=not no_resume,
+                resume=resume,
             )
         )
         # Exit with 0 for success, 1 for failure

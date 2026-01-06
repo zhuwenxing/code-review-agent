@@ -696,6 +696,12 @@ class CodeReviewAgent:
         success_rate = (completed / total_reviews * 100) if total_reviews > 0 else 0
         avg_time_per_file = (self.stats.elapsed_seconds / total_reviews) if total_reviews > 0 else 0
 
+        # Build context block (avoid backslash in f-string)
+        if self.codebase_context:
+            context_block = f"```json\n{self.codebase_context}\n```"
+        else:
+            context_block = "未执行探索"
+
         report = f"""# 代码审查摘要报告
 
 **生成时间**：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -711,9 +717,7 @@ class CodeReviewAgent:
 
 ## 代码库上下文
 
-```json
-{self.codebase_context if self.codebase_context else "未执行探索"}
-```
+{context_block}
 
 ---
 
