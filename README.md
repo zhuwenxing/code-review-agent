@@ -35,11 +35,14 @@ uv pip install -e .
 ### 基本用法
 
 ```bash
-# 审查指定目录（使用 Claude，默认）
-code-review /path/to/your/code
+# 审查当前目录（使用 Claude，默认）
+code-review-agent
+
+# 审查指定目录
+code-review-agent /path/to/your/code
 
 # 使用 Gemini 进行审查
-code-review /path/to/your/code --agent gemini
+code-review-agent --agent gemini
 ```
 
 ### 增量审查
@@ -48,19 +51,19 @@ code-review /path/to/your/code --agent gemini
 
 ```bash
 # 正常运行（自动增量审查）
-code-review /path/to/code
+code-review-agent
 
 # 强制全量审查（忽略之前的状态）
-code-review /path/to/code --force-full
+code-review-agent --force-full
 
 # 禁用断点续传
-code-review /path/to/code --no-resume
+code-review-agent --no-resume
 ```
 
 ### 高级选项
 
 ```bash
-code-review /path/to/code \
+code-review-agent /path/to/code \
   --agent claude \
   --extensions py,go,js,ts \
   --output-dir reviews \
@@ -74,7 +77,7 @@ code-review /path/to/code \
 
 | 参数 | 简写 | 默认值 | 说明 |
 |------|------|--------|------|
-| `path` | - | - | 要审查的目录路径（必需） |
+| `path` | - | 当前目录 | 要审查的目录路径 |
 | `--agent` | `-a` | `claude` | LLM 引擎：`claude` 或 `gemini` |
 | `--extensions` | `-e` | `py,go,js,ts,java,cpp,c,h` | 要审查的文件扩展名 |
 | `--output-dir` | `-o` | `reviews` | 审查报告输出目录 |
