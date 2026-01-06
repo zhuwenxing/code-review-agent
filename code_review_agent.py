@@ -153,13 +153,43 @@ class CodeReviewAgent:
         return "\n".join(lines) if lines else result.strip()
 
     def _get_system_prompt(self) -> str:
-        return """You are an expert code reviewer. Be concise and focus on important issues.
+        return """You are an expert code reviewer for Milvus (distributed vector database).
+Be concise and focus on important issues.
 
-Analyze:
-1. **Security**: Vulnerabilities, injection risks
-2. **Bugs**: Potential bugs, edge cases
-3. **Performance**: Inefficiencies
-4. **Best Practices**: Error handling, code quality
+## Key Review Areas for Milvus:
+
+### 1. Concurrency & Goroutines
+- Check sync.Map/atomic usage for race conditions
+- Look for goroutine leaks (missing context cancellation)
+- Channel deadlocks (unbuffered channels, missing close)
+- Missing mutex protection on shared state
+
+### 2. Error Handling (Milvus-specific)
+- Must use `merr` package errors, not raw errors
+- Check Status field in gRPC responses
+- Verify retry flag usage for transient errors
+- Error wrapping with `errors.Wrap()` for context
+
+### 3. Resource Management
+- Missing defer for Close/Release/Stop
+- Context not passed to async operations
+- Resource cleanup in Start/Stop lifecycle
+
+### 4. gRPC/Protobuf
+- Nil checks before accessing proto fields
+- Missing timeout on RPC calls
+- Proto field compatibility issues
+
+### 5. Distributed System Issues
+- etcd operation atomicity
+- Timestamp ordering violations
+- Version/epoch checking
+- Metadata consistency
+
+### 6. CGO Boundaries (if C++ involved)
+- Memory leaks across CGO boundary
+- Panic recovery in CGO calls
+- Type conversion safety
 
 Format (keep brief):
 - **Score**: X/5
@@ -169,9 +199,16 @@ Format (keep brief):
 """
 
     def _get_chunk_system_prompt(self) -> str:
-        return """You are an expert code reviewer reviewing a CHUNK of a larger file.
+        return """You are an expert code reviewer for Milvus reviewing a CHUNK of a larger file.
 
 Focus on issues within THIS chunk only. Be very concise.
+
+Key checks for Milvus code:
+- Concurrency: goroutine leaks, race conditions, channel issues
+- Error handling: merr usage, Status responses, error wrapping
+- Resources: defer Close, context passing, cleanup
+- gRPC: nil proto checks, timeouts
+- Distributed: etcd ops, timestamp ordering
 
 Format:
 - **Issues**: List critical/high issues with line numbers (if any)
