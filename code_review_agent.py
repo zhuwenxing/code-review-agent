@@ -202,49 +202,49 @@ class CodeReviewAgent:
 
     async def _explore_codebase(self) -> str:
         """Explore codebase to understand patterns and generate specific rules."""
-        print("\n[Phase 1] Exploring codebase to generate specific review rules...")
+        print("\n[阶段 1] 正在探索代码库以生成特定审查规则...")
 
-        prompt = f"""Explore this codebase at {self.target_path} to understand its patterns.
+        prompt = f"""探索位于 {self.target_path} 的代码库以了解其模式。
 
-Tasks:
-1. Look at the directory structure (use Glob to find key files)
-2. Read a few representative files to understand:
-   - Programming language patterns and conventions
-   - Error handling patterns (custom error types, wrapping)
-   - Logging patterns (which logger, format)
-   - Testing patterns
-   - Common frameworks/libraries used
-   - Concurrency patterns (channels, mutexes, goroutines)
+任务：
+1. 查看目录结构（使用 Glob 查找关键文件）
+2. 阅读一些代表性文件以了解：
+   - 编程语言模式和约定
+   - 错误处理模式（自定义错误类型、包装）
+   - 日志记录模式（使用哪个日志记录器、格式）
+   - 测试模式
+   - 常用框架/库
+   - 并发模式（channels、mutexes、goroutines 等）
 
-3. Based on your exploration, generate SPECIFIC review rules for this codebase.
+3. 根据探索结果，为此代码库生成特定的审查规则。
 
-Output format (JSON):
+输出格式（JSON）：
 {{
-  "project_type": "description of project",
-  "languages": ["go", "python", etc],
+  "project_type": "项目描述",
+  "languages": ["go", "python" 等],
   "key_patterns": {{
-    "error_handling": "description of how errors are handled",
-    "logging": "description of logging approach",
-    "concurrency": "description of concurrency patterns",
-    "testing": "description of test patterns"
+    "error_handling": "错误处理方式描述",
+    "logging": "日志记录方法描述",
+    "concurrency": "并发模式描述",
+    "testing": "测试模式描述"
   }},
   "specific_rules": [
-    "Rule 1: Check for X pattern",
-    "Rule 2: Verify Y is used correctly",
+    "规则 1：检查 X 模式",
+    "规则 2：验证 Y 是否正确使用",
     ...
   ],
   "common_issues_to_check": [
-    "Issue 1 description",
-    "Issue 2 description",
+    "常见问题 1 描述",
+    "常见问题 2 描述",
     ...
   ]
 }}
 
-Be thorough but concise. Focus on patterns that would help a code reviewer."""
+请彻底但简洁地完成。专注于有助于代码审查的模式。所有输出使用中文。"""
 
         options = ClaudeAgentOptions(
             allowed_tools=["Glob", "Read", "Grep"],
-            system_prompt="You are a senior software architect analyzing a codebase. Be thorough and specific.",
+            system_prompt="你是一名正在分析代码库的高级软件架构师。请彻底且具体。使用中文输出。",
             cwd=str(self.target_path),
             permission_mode="bypassPermissions",
             max_turns=15,
@@ -290,55 +290,55 @@ Be thorough but concise. Focus on patterns that would help a code reviewer."""
             return ""
 
     def _get_system_prompt(self) -> str:
-        base_prompt = """You are an expert code reviewer. Be concise and focus on important issues.
+        base_prompt = """你是一名专业的代码审查员。请简洁明了，专注于重要问题。
 
-## Standard Review Areas:
-1. **Security**: Vulnerabilities, injection risks
-2. **Bugs**: Potential bugs, edge cases, nil/null issues
-3. **Concurrency**: Race conditions, deadlocks, goroutine leaks
-4. **Error Handling**: Proper error wrapping, not swallowing errors
-5. **Resources**: Proper cleanup (defer close), context passing
-6. **Performance**: Inefficiencies, memory leaks
+## 标准审查领域：
+1. **安全性**：漏洞、注入风险
+2. **缺陷**：潜在 bug、边界情况、nil/null 问题
+3. **并发**：竞态条件、死锁、goroutine 泄漏
+4. **错误处理**：正确的错误包装、不吞没错误
+5. **资源管理**：正确的清理（defer close）、context 传递
+6. **性能**：低效问题、内存泄漏
 """
 
         if self.specific_rules:
             base_prompt += f"""
-## Project-Specific Rules (from codebase analysis):
+## 项目特定规则（来自代码库分析）：
 {self.specific_rules}
 """
 
         base_prompt += """
-Format (keep brief):
-- **Score**: X/5
-- **Summary**: 1-2 sentences
-- **Issues**: List critical/high issues only (with line numbers)
-- **Recommendations**: Top 2-3 suggestions
+输出格式（保持简洁）：
+- **评分**：X/5
+- **总结**：1-2 句话
+- **问题**：仅列出严重/高优先级问题（带行号）
+- **建议**：前 2-3 条建议
 """
         return base_prompt
 
     def _get_chunk_system_prompt(self) -> str:
-        base = """You are an expert code reviewer reviewing a CHUNK of a larger file.
-Focus on issues within THIS chunk only. Be very concise.
+        base = """你是一名专业的代码审查员，正在审查一个大文件的一个代码块。
+仅专注于此代码块内的问题。请非常简洁。
 
-Key checks:
-- Concurrency: goroutine leaks, race conditions, channel issues
-- Error handling: proper wrapping, not swallowing
-- Resources: defer Close, context passing, cleanup
-- Nil checks before dereferencing
+关键检查：
+- 并发：goroutine 泄漏、竞态条件、channel 问题
+- 错误处理：正确的包装、不吞没错误
+- 资源：defer Close、context 传递、清理
+- 解引用前的 nil 检查
 """
         if self.specific_rules:
-            base += f"\nProject-specific:\n{self.specific_rules[:500]}\n"
+            base += f"\n项目特定规则：\n{self.specific_rules[:500]}\n"
 
         base += """
-Format:
-- **Issues**: List critical/high issues with line numbers (if any)
-- **Notes**: Brief observations (1-2 sentences max)
+输出格式：
+- **问题**：列出严重/高优先级问题（如有，带行号）
+- **备注**：简要观察（最多 1-2 句话）
 """
         return base
 
     async def _discover_files(self) -> list[str]:
         """Discover files to review, respecting .gitignore."""
-        print(f"\n[Phase 2] Discovering files in {self.target_path}...")
+        print(f"\n[阶段 2] 正在发现 {self.target_path} 中的文件...")
 
         files = []
         for ext in self.file_extensions:
@@ -352,7 +352,7 @@ Format:
         if self.max_files:
             files = files[: self.max_files]
 
-        print(f"  Found {len(files)} files to review (after .gitignore filter)")
+        print(f"  找到 {len(files)} 个待审查文件（已应用 .gitignore 过滤）")
         return files
 
     def _read_file_lines(self, file_path: str) -> list[str]:
@@ -372,12 +372,12 @@ Format:
             safe_name = review["file"].replace("/", "_").replace("\\", "_")
             output_file = self.output_dir / f"{safe_name}.md"
 
-            content = f"""# Code Review: {review['file']}
+            content = f"""# 代码审查：{review['file']}
 
-**Reviewed at**: {review['timestamp']}
-**Lines**: {review.get('lines', 'N/A')}
-**Chunked**: {'Yes' if review.get('chunked') else 'No'}
-**Status**: {review['status']}
+**审查时间**：{review['timestamp']}
+**行数**：{review.get('lines', 'N/A')}
+**分块**：{'是' if review.get('chunked') else '否'}
+**状态**：{review['status']}
 
 ---
 
@@ -395,13 +395,13 @@ Format:
         end_line: int,
     ) -> str:
         """Review a single chunk of code."""
-        prompt = f"""Review this code chunk (lines {start_line}-{end_line}) from file: {Path(file_path).name}
+        prompt = f"""审查此代码块（第 {start_line}-{end_line} 行），来自文件：{Path(file_path).name}
 
 ```
 {chunk_content}
 ```
 
-List any critical issues found in THIS chunk only. Be very brief."""
+仅列出此代码块中发现的严重问题。请非常简洁。"""
 
         options = ClaudeAgentOptions(
             allowed_tools=[],
@@ -422,23 +422,23 @@ List any critical issues found in THIS chunk only. Be very brief."""
                     if message.result:
                         review_parts.append(message.result)
 
-            return f"### Chunk {chunk_num} (lines {start_line}-{end_line})\n" + "\n".join(review_parts)
+            return f"### 代码块 {chunk_num}（第 {start_line}-{end_line} 行）\n" + "\n".join(review_parts)
         except Exception as e:
-            return f"### Chunk {chunk_num} (lines {start_line}-{end_line})\nError: {str(e)}"
+            return f"### 代码块 {chunk_num}（第 {start_line}-{end_line} 行）\n错误：{str(e)}"
 
     async def _merge_chunk_reviews(self, file_path: str, chunk_reviews: list[str]) -> str:
         """Merge multiple chunk reviews into a single review."""
         combined = "\n\n".join(chunk_reviews)
 
-        prompt = f"""Merge these chunk reviews for file: {Path(file_path).name}
+        prompt = f"""合并以下文件代码块的审查结果：{Path(file_path).name}
 
 {combined}
 
-Provide a unified review with overall score, summary, and combined issues list."""
+请提供统一的审查，包括总体评分、总结和合并的问题列表。使用中文输出。"""
 
         options = ClaudeAgentOptions(
             allowed_tools=[],
-            system_prompt="Merge chunk reviews. Provide: Score X/5, Summary, Issues list, Recommendations.",
+            system_prompt="合并代码块审查。提供：评分 X/5、总结、问题列表、建议。使用中文输出。",
             cwd=str(self.target_path),
             permission_mode="bypassPermissions",
             max_turns=2,
@@ -492,9 +492,9 @@ Provide a unified review with overall score, summary, and combined issues list."
 
     async def _review_normal_file(self, file_path: str) -> str:
         """Review a normal-sized file."""
-        prompt = f"""Review this file: {file_path}
+        prompt = f"""审查此文件：{file_path}
 
-Read the file and provide your review. Focus on critical issues only. Be concise."""
+请阅读文件并提供您的审查。仅关注严重问题。请简洁。使用中文输出。"""
 
         options = ClaudeAgentOptions(
             allowed_tools=["Read"],
@@ -624,9 +624,9 @@ Read the file and provide your review. Focus on critical issues only. Be concise
         self.stats.start_time = time.time()
         self.progress = ProgressDisplay(self.stats)
 
-        print(f"\n[Phase 3] Reviewing {len(files)} files with {self.concurrency} workers...")
-        print(f"  Large file threshold: {self.large_file_threshold} lines")
-        print(f"  Reviews saved to: {self.output_dir}/")
+        print(f"\n[阶段 3] 正在审查 {len(files)} 个文件，使用 {self.concurrency} 个工作线程...")
+        print(f"  大文件阈值：{self.large_file_threshold} 行")
+        print(f"  审查结果保存到：{self.output_dir}/")
         print("-" * 80)
 
         tasks = [self._review_single_file(fp, semaphore) for fp in files]
@@ -651,7 +651,7 @@ Read the file and provide your review. Focus on critical issues only. Be concise
 
     async def _generate_summary(self) -> str:
         """Generate final summary report."""
-        print("\n[Phase 4] Generating summary report...")
+        print("\n[阶段 4] 正在生成摘要报告...")
 
         completed_reviews = [r for r in self.reviews if r["status"] == "completed"]
 
@@ -661,26 +661,28 @@ Read the file and provide your review. Focus on critical issues only. Be concise
             reviews_text = "\n\n".join(
                 [f"**{r['file']}**:\n{r['review'][:500]}" for r in sampled]
             )
-            reviews_text = f"(Sampled 50 of {len(completed_reviews)} reviews)\n\n" + reviews_text
+            reviews_text = f"(抽样 50 个，共 {len(completed_reviews)} 个审查)\n\n" + reviews_text
         else:
             reviews_text = "\n\n".join(
                 [f"**{r['file']}**:\n{r['review'][:500]}" for r in completed_reviews]
             )
 
-        prompt = f"""Summarize these code reviews:
+        prompt = f"""总结以下代码审查：
 
 {reviews_text}
 
-Provide:
-1. **Overall Assessment**: 1-2 sentences
-2. **Common Issues**: Top 3-5 patterns found
-3. **Critical Items**: Most urgent issues to fix
-4. **Top Recommendations**: 3-5 actionable items
+请提供：
+1. **总体评估**：1-2 句话
+2. **常见问题**：前 3-5 个发现的模式
+3. **关键问题**：最需要修复的紧急问题
+4. **主要建议**：3-5 个可执行的改进项
+
+使用中文输出。
 """
 
         options = ClaudeAgentOptions(
             allowed_tools=[],
-            system_prompt="You are a senior architect. Summarize code review findings concisely.",
+            system_prompt="你是一名高级架构师。请简洁地总结代码审查结果。使用中文输出。",
             permission_mode="bypassPermissions",
             max_turns=2,
         )
@@ -706,56 +708,56 @@ Provide:
         completed = sum(1 for r in self.reviews if r["status"] == "completed")
         errors = sum(1 for r in self.reviews if r["status"] == "error")
 
-        report = f"""# Code Review Summary Report
+        report = f"""# 代码审查摘要报告
 
-**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**Target Directory**: `{self.target_path}`
-**Files Reviewed**: {len(self.reviews)}
-**File Types**: {', '.join(self.file_extensions)}
-**Concurrency**: {self.concurrency} workers
-**Total Time**: {elapsed}
-**Throughput**: {self.stats.files_per_second:.2f} files/sec
+**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**目标目录**：`{self.target_path}`
+**审查文件数**：{len(self.reviews)}
+**文件类型**：{', '.join(self.file_extensions)}
+**并发数**：{self.concurrency} 个工作线程
+**总耗时**：{elapsed}
+**吞吐量**：{self.stats.files_per_second:.2f} 文件/秒
 
 ---
 
-## Codebase Context
+## 代码库上下文
 
 ```json
-{self.codebase_context if self.codebase_context else "No exploration performed"}
+{self.codebase_context if self.codebase_context else "未执行探索"}
 ```
 
 ---
 
-## Executive Summary
+## 执行摘要
 
 {summary}
 
 ---
 
-## Statistics
+## 统计信息
 
-| Metric | Value |
-|--------|-------|
-| Total Files | {len(self.reviews)} |
-| Successfully Reviewed | {completed} |
-| Errors | {errors} |
-| Chunked Files | {self.stats.chunked_files} |
-| Success Rate | {completed/len(self.reviews)*100:.1f}% |
-| Total Time | {elapsed} |
-| Avg Time/File | {self.stats.elapsed_seconds/len(self.reviews):.2f}s |
+| 指标 | 值 |
+|------|-----|
+| 总文件数 | {len(self.reviews)} |
+| 成功审查 | {completed} |
+| 错误 | {errors} |
+| 分块文件 | {self.stats.chunked_files} |
+| 成功率 | {completed/len(self.reviews)*100:.1f}% |
+| 总耗时 | {elapsed} |
+| 平均每文件耗时 | {self.stats.elapsed_seconds/len(self.reviews):.2f}秒 |
 
 ---
 
-## Individual Reviews
+## 单独审查
 
-Individual review files are saved in: `{self.output_dir}/`
+单独审查文件保存在：`{self.output_dir}/`
 
-| File | Lines | Chunked | Status |
-|------|-------|---------|--------|
+| 文件 | 行数 | 分块 | 状态 |
+|------|------|------|------|
 """
         for r in self.reviews:
             status_emoji = "✅" if r["status"] == "completed" else "❌"
-            chunked = "Yes" if r.get("chunked") else "No"
+            chunked = "是" if r.get("chunked") else "否"
             report += f"| {r['file']} | {r.get('lines', 'N/A')} | {chunked} | {status_emoji} |\n"
 
         return report
@@ -763,20 +765,20 @@ Individual review files are saved in: `{self.output_dir}/`
     async def run(self) -> str:
         """Run the complete code review process."""
         print("=" * 60)
-        print("Code Review Agent - With Codebase Exploration")
+        print("代码审查 Agent - 支持代码库探索")
         print("=" * 60)
 
         # Phase 1: Explore codebase (optional)
         if not self.skip_explore:
             await self._explore_codebase()
         else:
-            print("\n[Phase 1] Skipping codebase exploration (--skip-explore)")
+            print("\n[阶段 1] 跳过代码库探索 (--skip-explore)")
 
         # Phase 2: Discover files
         files = await self._discover_files()
 
         if not files:
-            print("No files found to review!")
+            print("未找到待审查文件！")
             return ""
 
         # Phase 3: Review files (with incremental save)
@@ -793,13 +795,13 @@ Individual review files are saved in: `{self.output_dir}/`
             f.write(report)
 
         print("\n" + "=" * 60)
-        print("Review Complete!")
-        print(f"Total time: {self.stats.format_time(self.stats.elapsed_seconds)}")
-        print(f"Files reviewed: {self.stats.completed} success, {self.stats.errors} errors")
-        print(f"Chunked files: {self.stats.chunked_files}")
-        print(f"Throughput: {self.stats.files_per_second:.2f} files/sec")
-        print(f"Individual reviews: {self.output_dir}/")
-        print(f"Summary report: {report_path}")
+        print("审查完成！")
+        print(f"总耗时：{self.stats.format_time(self.stats.elapsed_seconds)}")
+        print(f"审查文件：{self.stats.completed} 个成功，{self.stats.errors} 个错误")
+        print(f"分块文件：{self.stats.chunked_files} 个")
+        print(f"吞吐量：{self.stats.files_per_second:.2f} 文件/秒")
+        print(f"单独审查：{self.output_dir}/")
+        print(f"摘要报告：{report_path}")
         print("=" * 60)
 
         return str(report_path)
