@@ -3,10 +3,9 @@
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +13,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FileReviewState:
     """State of a single file review."""
+
     file_path: str  # Relative path from root
     content_hash: str  # SHA256 hash of file content
     status: str  # "pending", "in_progress", "completed", "error"
-    review_time: Optional[str] = None  # ISO format timestamp
-    error_message: Optional[str] = None
+    review_time: str | None = None  # ISO format timestamp
+    error_message: str | None = None
     lines: int = 0
     chunked: bool = False
 
@@ -26,6 +26,7 @@ class FileReviewState:
 @dataclass
 class ReviewSessionState:
     """State of an entire review session."""
+
     session_id: str
     root_path: str
     started_at: str
@@ -77,7 +78,7 @@ class ReviewStateManager:
         self.output_dir = output_dir
         self.root_path = root_path
         self.state_file = output_dir / self.STATE_FILE_NAME
-        self.state: Optional[ReviewSessionState] = None
+        self.state: ReviewSessionState | None = None
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute SHA256 hash of file content using chunked reading.
@@ -104,7 +105,7 @@ class ReviewStateManager:
                 while chunk := f.read(65536):
                     sha256_hash.update(chunk)
                     # Count newlines in this chunk
-                    line_count += chunk.count(b'\n')
+                    line_count += chunk.count(b"\n")
             # Add 1 for files that don't end with newline but have content
             if line_count == 0:
                 # Check if file has any content
@@ -112,17 +113,17 @@ class ReviewStateManager:
                 if file_path_stat.st_size > 0:
                     line_count = 1
             return sha256_hash.hexdigest(), line_count
-        except (IOError, OSError) as e:
+        except OSError as e:
             logger.warning(f"Failed to hash {file_path}: {e}")
             return "", 0
 
-    def load_state(self) -> Optional[ReviewSessionState]:
+    def load_state(self) -> ReviewSessionState | None:
         """Load existing state from file if available."""
         if not self.state_file.exists():
             return None
 
         try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
+            with open(self.state_file, encoding="utf-8") as f:
                 data = json.load(f)
             self.state = ReviewSessionState.from_dict(data)
             logger.info(f"Loaded existing state: {self.state.completed_files}/{self.state.total_files} completed")
@@ -291,7 +292,8 @@ class ReviewStateManager:
             return []
 
         return [
-            rel_path for rel_path, file_state in self.state.files.items()
+            rel_path
+            for rel_path, file_state in self.state.files.items()
             if file_state.status in ("pending", "in_progress", "error")
         ]
 
@@ -306,7 +308,10 @@ class ReviewStateManager:
             "completed": self.state.completed_files,
             "errors": self.state.error_files,
             "skipped": self.state.skipped_files,
-            "pending": self.state.total_files - self.state.completed_files - self.state.error_files - self.state.skipped_files,
+            "pending": self.state.total_files
+            - self.state.completed_files
+            - self.state.error_files
+            - self.state.skipped_files,
         }
 
     def clear_state(self):

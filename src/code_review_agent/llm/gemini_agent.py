@@ -5,10 +5,9 @@ import json
 import logging
 import os
 import shutil
-from typing import Optional
 
-from .base import LLMAgent
 from ..constants import DEFAULT_LLM_TIMEOUT
+from .base import LLMAgent
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class GeminiAgent(LLMAgent):
 
     def __init__(
         self,
-        env: Optional[dict[str, str]] = None,
+        env: dict[str, str] | None = None,
         auto_approve: bool = True,
     ):
         """Initialize Gemini agent.
@@ -36,10 +35,7 @@ class GeminiAgent(LLMAgent):
         """
         self._gemini_path = shutil.which("gemini")
         if not self._gemini_path:
-            raise RuntimeError(
-                "Gemini CLI not found. Please install it with: "
-                "npm install -g @google/gemini-cli"
-            )
+            raise RuntimeError("Gemini CLI not found. Please install it with: npm install -g @google/gemini-cli")
         self._env = env or {}
         self._auto_approve = auto_approve
         if auto_approve:
@@ -56,10 +52,10 @@ class GeminiAgent(LLMAgent):
         self,
         prompt: str,
         system_prompt: str = "",
-        allowed_tools: Optional[list[str]] = None,
+        allowed_tools: list[str] | None = None,
         cwd: str = ".",
         max_turns: int = 10,
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
     ) -> str:
         """Query Gemini CLI and return the text response.
 
@@ -86,13 +82,9 @@ class GeminiAgent(LLMAgent):
 
         # Warn about ignored parameters
         if allowed_tools:
-            logger.debug(
-                "allowed_tools parameter is not supported by Gemini CLI and will be ignored"
-            )
+            logger.debug("allowed_tools parameter is not supported by Gemini CLI and will be ignored")
         if max_turns != 10:
-            logger.debug(
-                "max_turns parameter is not supported by Gemini CLI and will be ignored"
-            )
+            logger.debug("max_turns parameter is not supported by Gemini CLI and will be ignored")
 
         # Build full prompt with system prompt
         if system_prompt:
@@ -103,8 +95,10 @@ class GeminiAgent(LLMAgent):
         # Build command
         cmd = [
             self._gemini_path,
-            "-p", full_prompt,
-            "--output-format", "json",
+            "-p",
+            full_prompt,
+            "--output-format",
+            "json",
         ]
 
         # Only add --yolo if auto_approve is enabled
@@ -130,11 +124,11 @@ class GeminiAgent(LLMAgent):
                 proc.communicate(),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             logger.error(f"Gemini CLI timed out after {timeout}s")
             if proc:
                 await self._terminate_process(proc)
-            raise RuntimeError(f"Gemini CLI timed out after {timeout} seconds")
+            raise RuntimeError(f"Gemini CLI timed out after {timeout} seconds") from e
         except asyncio.CancelledError:
             logger.warning("Gemini CLI query was cancelled")
             if proc:

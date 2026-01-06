@@ -3,7 +3,6 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from pathspec import PathSpec
 from pathspec.patterns.gitwildmatch import GitWildMatchPattern
@@ -14,6 +13,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ParsedPattern:
     """Pre-parsed gitignore pattern with its compiled PathSpec."""
+
     pattern: str
     is_negation: bool
     spec: PathSpec  # Pre-compiled single-pattern PathSpec
@@ -22,6 +22,7 @@ class ParsedPattern:
 @dataclass
 class GitignoreFile:
     """Represents a parsed .gitignore file with pre-compiled patterns."""
+
     directory: Path  # Directory relative to root where .gitignore is located
     combined_spec: PathSpec  # Combined PathSpec for quick matching
     patterns: list[ParsedPattern]  # Individual patterns for negation handling
@@ -58,11 +59,13 @@ class GitignoreParser:
         if root_gitignore.exists():
             result = self._parse_gitignore(root_gitignore)
             if result:
-                gitignore_files.append(GitignoreFile(
-                    directory=Path("."),
-                    combined_spec=result[0],
-                    patterns=result[1],
-                ))
+                gitignore_files.append(
+                    GitignoreFile(
+                        directory=Path("."),
+                        combined_spec=result[0],
+                        patterns=result[1],
+                    )
+                )
 
         # Find all nested .gitignore files
         for gitignore_path in self.root_path.rglob(".gitignore"):
@@ -72,19 +75,18 @@ class GitignoreParser:
             rel_dir = gitignore_path.parent.relative_to(self.root_path)
             result = self._parse_gitignore(gitignore_path)
             if result:
-                gitignore_files.append(GitignoreFile(
-                    directory=rel_dir,
-                    combined_spec=result[0],
-                    patterns=result[1],
-                ))
+                gitignore_files.append(
+                    GitignoreFile(
+                        directory=rel_dir,
+                        combined_spec=result[0],
+                        patterns=result[1],
+                    )
+                )
 
         # Pre-sort by depth (shallow to deep) for efficient lookup
-        self._gitignore_files = sorted(
-            gitignore_files,
-            key=lambda x: len(x.directory.parts)
-        )
+        self._gitignore_files = sorted(gitignore_files, key=lambda x: len(x.directory.parts))
 
-    def _parse_gitignore(self, gitignore_path: Path) -> Optional[tuple[PathSpec, list[ParsedPattern]]]:
+    def _parse_gitignore(self, gitignore_path: Path) -> tuple[PathSpec, list[ParsedPattern]] | None:
         """Parse a single .gitignore file and return its PathSpec and pre-compiled patterns.
 
         Returns:
@@ -92,14 +94,11 @@ class GitignoreParser:
             All individual patterns are pre-compiled to avoid re-compilation in hot paths.
         """
         try:
-            with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(gitignore_path, encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
 
             # Filter out empty lines and comments, strip whitespace
-            filtered_patterns = [
-                line.strip() for line in lines
-                if line.strip() and not line.strip().startswith("#")
-            ]
+            filtered_patterns = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
 
             if not filtered_patterns:
                 return None
@@ -114,11 +113,13 @@ class GitignoreParser:
                 check_pattern = pattern[1:] if is_negation else pattern
                 # Pre-compile individual pattern PathSpec
                 single_spec = PathSpec.from_lines(GitWildMatchPattern, [check_pattern])
-                parsed_patterns.append(ParsedPattern(
-                    pattern=pattern,
-                    is_negation=is_negation,
-                    spec=single_spec,
-                ))
+                parsed_patterns.append(
+                    ParsedPattern(
+                        pattern=pattern,
+                        is_negation=is_negation,
+                        spec=single_spec,
+                    )
+                )
 
             return (combined_spec, parsed_patterns)
         except Exception as e:

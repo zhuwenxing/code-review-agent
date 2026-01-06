@@ -8,7 +8,6 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import aiofiles
 
@@ -19,8 +18,8 @@ from .constants import (
     MAX_CONCURRENT_CHUNK_REVIEWS,
 )
 from .gitignore import GitignoreParser
-from .llm import create_agent, LLMAgent
-from .progress import ReviewStats, ProgressDisplay
+from .llm import LLMAgent, create_agent
+from .progress import ProgressDisplay, ReviewStats
 from .state import ReviewStateManager
 
 logger = logging.getLogger(__name__)
@@ -50,7 +49,7 @@ class CodeReviewAgent:
         target_path: str,
         file_extensions: list[str],
         output_dir: str = "reviews",
-        max_files: Optional[int] = None,
+        max_files: int | None = None,
         concurrency: int = 5,
         retry_count: int = 2,
         chunk_lines: int = DEFAULT_CHUNK_LINES,
@@ -93,7 +92,7 @@ class CodeReviewAgent:
         self.codebase_context: str = ""
         self.specific_rules: str = ""
         self.stats = ReviewStats()
-        self.progress: Optional[ProgressDisplay] = None
+        self.progress: ProgressDisplay | None = None
         self._save_lock = asyncio.Lock()
         self._stats_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
@@ -172,7 +171,7 @@ class CodeReviewAgent:
             )
 
             # Extract JSON from result
-            json_match = re.search(r'\{[\s\S]*\}', result)
+            json_match = re.search(r"\{[\s\S]*\}", result)
             if json_match:
                 try:
                     context = json.loads(json_match.group())
@@ -312,18 +311,18 @@ class CodeReviewAgent:
             IOError: If file cannot be read (permission denied, not found, etc.)
         """
         try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            async with aiofiles.open(file_path, encoding="utf-8", errors="replace") as f:
                 content = await f.read()
                 return content.splitlines(keepends=True)
         except PermissionError as e:
             logger.warning(f"Permission denied reading file {file_path}: {e}")
-            raise IOError(f"Permission denied: {file_path}") from e
+            raise OSError(f"Permission denied: {file_path}") from e
         except FileNotFoundError as e:
             logger.warning(f"File not found: {file_path}")
-            raise IOError(f"File not found: {file_path}") from e
+            raise OSError(f"File not found: {file_path}") from e
         except OSError as e:
             logger.warning(f"OS error reading file {file_path}: {e}")
-            raise IOError(f"Cannot read file {file_path}: {e}") from e
+            raise OSError(f"Cannot read file {file_path}: {e}") from e
 
     async def _save_review(self, review: dict):
         """Save individual review to file with hierarchical directory structure."""
@@ -335,16 +334,16 @@ class CodeReviewAgent:
             # Create parent directories
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            content = f"""# 代码审查：{review['file']}
+            content = f"""# 代码审查：{review["file"]}
 
-**审查时间**：{review['timestamp']}
-**行数**：{review.get('lines', 'N/A')}
-**分块**：{'是' if review.get('chunked') else '否'}
-**状态**：{review['status']}
+**审查时间**：{review["timestamp"]}
+**行数**：{review.get("lines", "N/A")}
+**分块**：{"是" if review.get("chunked") else "否"}
+**状态**：{review["status"]}
 
 ---
 
-{review['review']}
+{review["review"]}
 """
             async with aiofiles.open(output_file, "w", encoding="utf-8") as f:
                 await f.write(content)
@@ -409,7 +408,7 @@ class CodeReviewAgent:
         """
         try:
             lines = await self._read_file_lines(file_path)
-        except IOError as e:
+        except OSError as e:
             return f"Error: {e}"
         if not lines:
             return "Error: File is empty"
@@ -436,14 +435,13 @@ class CodeReviewAgent:
 
         # Review chunks in parallel
         tasks = [
-            review_chunk_with_semaphore(idx, content, start, end)
-            for idx, (content, start, end) in enumerate(chunks, 1)
+            review_chunk_with_semaphore(idx, content, start, end) for idx, (content, start, end) in enumerate(chunks, 1)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Sort by chunk index and collect reviews, handling errors
         chunk_reviews = []
-        for result in sorted(results, key=lambda x: x[0] if isinstance(x, tuple) else float('inf')):
+        for result in sorted(results, key=lambda x: x[0] if isinstance(x, tuple) else float("inf")):
             if isinstance(result, tuple):
                 chunk_reviews.append(result[1])
             elif isinstance(result, Exception):
@@ -474,9 +472,9 @@ class CodeReviewAgent:
                 )
                 return self._extract_final_review(result)
 
-            except Exception as e:
+            except Exception:
                 if attempt < self.retry_count:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
                 raise
 
@@ -537,7 +535,7 @@ class CodeReviewAgent:
             # Try to read file lines
             try:
                 lines = await self._read_file_lines(file_path)
-            except IOError as e:
+            except OSError as e:
                 await self._update_stats(in_progress_delta=-1, errors_delta=1)
                 self.state_manager.mark_error(full_path, str(e))
                 await self._save_state()
@@ -628,14 +626,16 @@ class CodeReviewAgent:
         reviews = []
         for result in results:
             if isinstance(result, Exception):
-                reviews.append({
-                    "file": "unknown",
-                    "review": f"Unexpected error: {str(result)}",
-                    "status": "error",
-                    "chunked": False,
-                    "lines": 0,
-                    "timestamp": datetime.now().isoformat(),
-                })
+                reviews.append(
+                    {
+                        "file": "unknown",
+                        "review": f"Unexpected error: {str(result)}",
+                        "status": "error",
+                        "chunked": False,
+                        "lines": 0,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
             else:
                 reviews.append(result)
 
@@ -650,15 +650,12 @@ class CodeReviewAgent:
 
         if len(completed_reviews) > 50:
             import random
+
             sampled = random.sample(completed_reviews, 50)
-            reviews_text = "\n\n".join(
-                [f"**{r['file']}**:\n{r['review'][:500]}" for r in sampled]
-            )
+            reviews_text = "\n\n".join([f"**{r['file']}**:\n{r['review'][:500]}" for r in sampled])
             reviews_text = f"(抽样 50 个，共 {len(completed_reviews)} 个审查)\n\n" + reviews_text
         else:
-            reviews_text = "\n\n".join(
-                [f"**{r['file']}**:\n{r['review'][:500]}" for r in completed_reviews]
-            )
+            reviews_text = "\n\n".join([f"**{r['file']}**:\n{r['review'][:500]}" for r in completed_reviews])
 
         prompt = f"""总结以下代码审查：
 
@@ -701,10 +698,10 @@ class CodeReviewAgent:
 
         report = f"""# 代码审查摘要报告
 
-**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**生成时间**：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 **目标目录**：`{self.target_path}`
 **审查文件数**：{total_reviews}（跳过 {skipped_count} 个未变更文件）
-**文件类型**：{', '.join(self.file_extensions)}
+**文件类型**：{", ".join(self.file_extensions)}
 **使用 Agent**：{self.llm_agent.name}
 **并发数**：{self.concurrency} 个工作线程
 **总耗时**：{elapsed}

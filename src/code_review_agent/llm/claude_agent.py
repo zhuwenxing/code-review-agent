@@ -2,18 +2,17 @@
 
 import asyncio
 import logging
-from typing import Optional
 
 from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
     AssistantMessage,
+    ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
+    query,
 )
 
-from .base import LLMAgent
 from ..constants import DEFAULT_LLM_TIMEOUT
+from .base import LLMAgent
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class ClaudeAgent(LLMAgent):
 
     def __init__(
         self,
-        env: Optional[dict[str, str]] = None,
+        env: dict[str, str] | None = None,
         auto_approve: bool = True,
     ):
         """Initialize Claude agent.
@@ -38,8 +37,7 @@ class ClaudeAgent(LLMAgent):
         self._auto_approve = auto_approve
         if auto_approve:
             logger.warning(
-                "ClaudeAgent initialized with auto_approve=True. "
-                "Tool calls will execute without user confirmation."
+                "ClaudeAgent initialized with auto_approve=True. Tool calls will execute without user confirmation."
             )
 
     @property
@@ -50,10 +48,10 @@ class ClaudeAgent(LLMAgent):
         self,
         prompt: str,
         system_prompt: str = "",
-        allowed_tools: Optional[list[str]] = None,
+        allowed_tools: list[str] | None = None,
         cwd: str = ".",
         max_turns: int = 10,
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
     ) -> str:
         """Query Claude and return the text response.
 
@@ -97,9 +95,9 @@ class ClaudeAgent(LLMAgent):
                             result_parts.append(str(message.result))
 
             await asyncio.wait_for(_query(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             logger.error(f"Claude query timed out after {timeout}s")
-            raise RuntimeError(f"Claude query timed out after {timeout} seconds")
+            raise RuntimeError(f"Claude query timed out after {timeout} seconds") from e
         except asyncio.CancelledError:
             logger.warning("Claude query was cancelled")
             raise
