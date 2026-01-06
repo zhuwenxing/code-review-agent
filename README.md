@@ -64,7 +64,7 @@ code-review-agent --no-resume
 
 ```bash
 code-review-agent /path/to/code \
-  --agent gemini \
+  --agent claude \
   --extensions py,go,js,ts \
   --output-dir reviews \
   --concurrency 10 \
