@@ -55,7 +55,7 @@ python code_review_agent.py /path/to/your/code
 
 ```bash
 python code_review_agent.py /path/to/code \
-  --extensions py,go,js \
+  --extensions py,go,js,ts \
   --output-dir reviews \
   --concurrency 10 \
   --max-files 100 \
@@ -218,7 +218,7 @@ python code_review_agent.py /path/to/your/code
 
 ```bash
 python code_review_agent.py /path/to/code \
-  --extensions py,go,js \
+  --extensions py,go,js,ts \
   --output-dir reviews \
   --concurrency 10 \
   --max-files 100 \
@@ -303,6 +303,26 @@ Implemented using `pathspec` library, matching Git's behavior exactly.
 - **Recommendations**:
   - Add context manager for database connection
   - Consider using async/await for I/O operations
+```
+
+#### Summary Report
+
+```markdown
+# Code Review Summary Report
+
+**Generated**: 2026-01-06 10:35:00
+**Files Reviewed**: 25
+**Throughput**: 2.5 files/sec
+
+## Executive Summary
+[AI-generated summary of common issues and recommendations]
+
+## Statistics
+| Metric | Value |
+|--------|-------|
+| Total Files | 25 |
+| Successfully Reviewed | 24 |
+| Errors | 1 |
 ```
 
 ### Dependencies
