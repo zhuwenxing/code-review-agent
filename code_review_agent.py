@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 
 from claude_agent_sdk import (
     query,
@@ -33,6 +34,80 @@ from claude_agent_sdk import (
 # Constants
 DEFAULT_CHUNK_LINES = 500
 DEFAULT_LARGE_FILE_LINES = 800
+
+
+class GitignoreParser:
+    """Simple .gitignore parser."""
+
+    def __init__(self, root_path: Path):
+        self.root_path = root_path
+        self.patterns = []
+        gitignore_path = root_path / ".gitignore"
+        if gitignore_path.exists():
+            self._parse_gitignore(gitignore_path)
+
+    def _parse_gitignore(self, gitignore_path: Path):
+        """Parse .gitignore file and extract patterns."""
+        with open(gitignore_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments
+                if not line or line.startswith("#"):
+                    continue
+                self.patterns.append(line)
+
+    def is_ignored(self, file_path: Path) -> bool:
+        """Check if a file matches any ignore pattern."""
+        try:
+            rel_path = file_path.relative_to(self.root_path)
+        except ValueError:
+            return False
+
+        path_str = str(rel_path)
+        path_parts = path_str.split("/")
+
+        ignored = False
+        for pattern in self.patterns:
+            if self._match_pattern(path_str, path_parts, pattern):
+                if pattern.startswith("!"):
+                    # Negation pattern - unignore
+                    ignored = False
+                else:
+                    # Normal ignore pattern
+                    ignored = True
+
+        return ignored
+
+    def _match_pattern(self, path_str: str, path_parts: list[str], pattern: str) -> bool:
+        """Check if path matches a gitignore pattern."""
+        # Remove negation prefix for matching
+        if pattern.startswith("!"):
+            pattern = pattern[1:]
+
+        # Directory pattern (ends with /)
+        if pattern.endswith("/"):
+            pattern = pattern[:-1]
+
+        # Check if pattern is a directory name (no slash)
+        # If so, it should match the directory itself or anything under it
+        if "/" not in pattern and "*" not in pattern and "?" not in pattern and "[" not in pattern:
+            # Simple directory name like ".venv"
+            if pattern in path_parts:
+                return True
+
+        # Check if any part of the path matches
+        for i in range(len(path_parts)):
+            subpath = "/".join(path_parts[i:])
+
+            # Match with fnmatch
+            if fnmatch(subpath, pattern) or fnmatch(path_str, pattern):
+                return True
+
+            # Match basename only
+            if fnmatch(path_parts[-1], pattern):
+                return True
+
+        return False
 
 
 @dataclass
@@ -123,6 +198,7 @@ class CodeReviewAgent:
         self.stats = ReviewStats()
         self.progress: Optional[ProgressDisplay] = None
         self._save_lock = asyncio.Lock()
+        self.gitignore = GitignoreParser(self.target_path)
 
     async def _explore_codebase(self) -> str:
         """Explore codebase to understand patterns and generate specific rules."""
@@ -261,20 +337,22 @@ Format:
         return base
 
     async def _discover_files(self) -> list[str]:
-        """Discover files to review."""
+        """Discover files to review, respecting .gitignore."""
         print(f"\n[Phase 2] Discovering files in {self.target_path}...")
 
         files = []
         for ext in self.file_extensions:
             pattern = f"**/*.{ext}"
             found = list(self.target_path.glob(pattern))
-            files.extend([str(f) for f in found if f.is_file()])
+            for f in found:
+                if f.is_file() and not self.gitignore.is_ignored(f):
+                    files.append(str(f))
 
         files = sorted(set(files))
         if self.max_files:
             files = files[: self.max_files]
 
-        print(f"  Found {len(files)} files to review")
+        print(f"  Found {len(files)} files to review (after .gitignore filter)")
         return files
 
     def _read_file_lines(self, file_path: str) -> list[str]:
