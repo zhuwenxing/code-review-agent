@@ -271,7 +271,7 @@ The agent checks for:
 
 #### .gitignore Support
 
-This tool has full `.gitignore` syntax support:
+This tool fully supports the `.gitignore` syntax:
 
 - ✅ Wildcard patterns: `*.pyc`, `*.log`
 - ✅ Directory patterns: `build/`, `dist/`
