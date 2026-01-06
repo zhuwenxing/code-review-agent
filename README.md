@@ -1,12 +1,12 @@
 # Code Review Agent
 
-<div align="center">
+<p align="center">
 
 **智能代码审查工具** - 基于 Claude Agent SDK
 
 [English](#english) | [中文](#中文)
 
-</div>
+</p>
 
 ---
 
