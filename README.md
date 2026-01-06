@@ -82,7 +82,7 @@ python code_review_agent.py /path/to/code \
 reviews/
 ├── SUMMARY.md                    # 汇总报告（含统计数据）
 ├── src_main.py.md                # 单个文件的审查报告
-├── src_utils_helper.go.md
+├── src_utils_helper.go.md        # 其他文件的审查报告
 └── ...
 ```
 
