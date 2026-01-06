@@ -1,6 +1,6 @@
 [project]
 name = "code-review-agent"
-version = "0.4.0"
+version = "0.4.1"
 description = "Intelligent code review tool supporting Claude and Gemini"
 readme = "README.md"
 requires-python = ">=3.10"
