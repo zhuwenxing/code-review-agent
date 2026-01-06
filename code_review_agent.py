@@ -3,11 +3,12 @@
 Code Review Agent using Claude Agent SDK
 
 This agent reviews code files in a directory and generates a comprehensive report.
-Supports parallel execution for improved performance.
+Supports parallel execution and chunked review for large files.
 """
 
 import asyncio
 import argparse
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,11 @@ from claude_agent_sdk import (
 )
 
 
+# Constants for chunked review
+DEFAULT_CHUNK_LINES = 500  # Lines per chunk
+DEFAULT_LARGE_FILE_LINES = 800  # Threshold for chunked review
+
+
 @dataclass
 class ReviewStats:
     """Statistics for the review process."""
@@ -31,6 +37,7 @@ class ReviewStats:
     completed: int = 0
     errors: int = 0
     in_progress: int = 0
+    chunked_files: int = 0
     start_time: float = field(default_factory=time.time)
 
     @property
@@ -73,7 +80,6 @@ class ProgressDisplay:
             eta = self.stats.format_time(self.stats.eta_seconds)
             elapsed = self.stats.format_time(self.stats.elapsed_seconds)
 
-            # Clear line and print progress
             print(f"\r[{progress:5.1f}%] {self.stats.completed}/{self.stats.total_files} done | "
                   f"{self.stats.in_progress} active | "
                   f"Elapsed: {elapsed} | ETA: {eta} | "
@@ -95,6 +101,8 @@ class CodeReviewAgent:
         max_files: Optional[int] = None,
         concurrency: int = 5,
         retry_count: int = 2,
+        chunk_lines: int = DEFAULT_CHUNK_LINES,
+        large_file_threshold: int = DEFAULT_LARGE_FILE_LINES,
     ):
         self.target_path = Path(target_path).resolve()
         self.file_extensions = file_extensions
@@ -102,6 +110,8 @@ class CodeReviewAgent:
         self.max_files = max_files
         self.concurrency = concurrency
         self.retry_count = retry_count
+        self.chunk_lines = chunk_lines
+        self.large_file_threshold = large_file_threshold
         self.reviews: list[dict] = []
         self.summary: str = ""
         self.stats = ReviewStats()
@@ -110,8 +120,6 @@ class CodeReviewAgent:
 
     def _extract_final_review(self, text: str) -> str:
         """Extract the final review from agent output, filtering intermediate text."""
-        import re
-
         # Common patterns indicating planning/intermediate text to filter out
         planning_patterns = [
             r"Let me read.*?(?=\n\n|\n#|\n-\s*\*\*|$)",
@@ -119,6 +127,7 @@ class CodeReviewAgent:
             r"This is a large.*?(?=\n\n|\n#|\n-\s*\*\*|$)",
             r"I need to.*?(?=\n\n|\n#|\n-\s*\*\*|$)",
             r"First,.*?(?=\n\n|\n#|\n-\s*\*\*|$)",
+            r"Now let me.*?(?=\n\n|\n#|\n-\s*\*\*|$)",
         ]
 
         result = text
@@ -131,6 +140,7 @@ class CodeReviewAgent:
             r"(-\s*\*\*Score\*\*.*)",
             r"(\*\*Score\*\*.*)",
             r"(##?\s*Summary.*)",
+            r"(##?\s*Chunk\s*\d+.*)",
         ]
 
         for marker in review_markers:
@@ -158,6 +168,28 @@ Format (keep brief):
 - **Recommendations**: Top 2-3 suggestions
 """
 
+    def _get_chunk_system_prompt(self) -> str:
+        return """You are an expert code reviewer reviewing a CHUNK of a larger file.
+
+Focus on issues within THIS chunk only. Be very concise.
+
+Format:
+- **Issues**: List critical/high issues with line numbers (if any)
+- **Notes**: Brief observations (1-2 sentences max)
+
+Do NOT provide overall scores or summaries - just list issues found in this chunk.
+"""
+
+    def _get_merge_system_prompt(self) -> str:
+        return """You are a senior code reviewer. Merge multiple chunk reviews into one final review.
+
+Combine the findings, remove duplicates, and provide:
+- **Score**: X/5 (overall quality)
+- **Summary**: 1-2 sentences about the entire file
+- **Issues**: Combined list of critical/high issues (with line numbers)
+- **Recommendations**: Top 2-3 suggestions for the whole file
+"""
+
     async def _discover_files(self) -> list[str]:
         """Discover files to review."""
         print(f"Discovering files in {self.target_path}...")
@@ -176,6 +208,124 @@ Format (keep brief):
         print(f"Found {len(files)} files to review")
         return files
 
+    def _read_file_lines(self, file_path: str) -> list[str]:
+        """Read file and return lines."""
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                return f.readlines()
+        except Exception:
+            return []
+
+    async def _review_chunk(
+        self,
+        file_path: str,
+        chunk_content: str,
+        chunk_num: int,
+        start_line: int,
+        end_line: int,
+    ) -> str:
+        """Review a single chunk of code."""
+        prompt = f"""Review this code chunk (lines {start_line}-{end_line}) from file: {Path(file_path).name}
+
+```
+{chunk_content}
+```
+
+List any critical issues found in THIS chunk only. Be very brief."""
+
+        options = ClaudeAgentOptions(
+            allowed_tools=[],
+            system_prompt=self._get_chunk_system_prompt(),
+            cwd=str(self.target_path),
+            permission_mode="bypassPermissions",
+            max_turns=2,
+        )
+
+        review_parts = []
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            review_parts.append(block.text)
+                elif isinstance(message, ResultMessage):
+                    if message.result:
+                        review_parts.append(message.result)
+
+            return f"### Chunk {chunk_num} (lines {start_line}-{end_line})\n" + "\n".join(review_parts)
+        except Exception as e:
+            return f"### Chunk {chunk_num} (lines {start_line}-{end_line})\nError: {str(e)}"
+
+    async def _merge_chunk_reviews(self, file_path: str, chunk_reviews: list[str]) -> str:
+        """Merge multiple chunk reviews into a single review."""
+        combined = "\n\n".join(chunk_reviews)
+
+        prompt = f"""Merge these chunk reviews for file: {Path(file_path).name}
+
+{combined}
+
+Provide a unified review with overall score, summary, and combined issues list."""
+
+        options = ClaudeAgentOptions(
+            allowed_tools=[],
+            system_prompt=self._get_merge_system_prompt(),
+            cwd=str(self.target_path),
+            permission_mode="bypassPermissions",
+            max_turns=2,
+        )
+
+        review_parts = []
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            review_parts.append(block.text)
+                elif isinstance(message, ResultMessage):
+                    if message.result:
+                        review_parts.append(message.result)
+
+            return "\n".join(review_parts)
+        except Exception as e:
+            # If merge fails, return concatenated chunk reviews
+            return f"## Chunked Review (merge failed: {e})\n\n{combined}"
+
+    async def _review_large_file_chunked(self, file_path: str) -> str:
+        """Review a large file by splitting into chunks."""
+        lines = self._read_file_lines(file_path)
+        if not lines:
+            return "Error: Could not read file"
+
+        total_lines = len(lines)
+        chunks = []
+
+        # Split into chunks
+        for i in range(0, total_lines, self.chunk_lines):
+            start_line = i + 1  # 1-indexed
+            end_line = min(i + self.chunk_lines, total_lines)
+            chunk_content = "".join(lines[i:end_line])
+            chunks.append((chunk_content, start_line, end_line))
+
+        if self.progress:
+            await self.progress.log(
+                f"  Large file ({total_lines} lines) -> {len(chunks)} chunks"
+            )
+
+        # Review each chunk (sequentially to avoid rate limits)
+        chunk_reviews = []
+        for idx, (content, start, end) in enumerate(chunks, 1):
+            review = await self._review_chunk(file_path, content, idx, start, end)
+            chunk_reviews.append(review)
+
+        # Merge chunk reviews
+        if len(chunk_reviews) > 1:
+            final_review = await self._merge_chunk_reviews(file_path, chunk_reviews)
+        else:
+            final_review = chunk_reviews[0] if chunk_reviews else "No review generated"
+
+        self.stats.chunked_files += 1
+        return final_review
+
     async def _review_single_file(self, file_path: str, semaphore: asyncio.Semaphore) -> dict:
         """Review a single file with semaphore-controlled concurrency."""
         async with semaphore:
@@ -185,81 +335,95 @@ Format (keep brief):
             if self.progress:
                 await self.progress.update(file_path, "Reviewing")
 
-            prompt = f"""Review this file: {file_path}
+            # Check if file is large and needs chunked review
+            lines = self._read_file_lines(file_path)
+            is_large_file = len(lines) > self.large_file_threshold
+
+            try:
+                if is_large_file:
+                    # Use chunked review for large files
+                    if self.progress:
+                        await self.progress.update(file_path, "Chunking")
+                    review_text = await self._review_large_file_chunked(file_path)
+                else:
+                    # Standard review for normal files
+                    review_text = await self._review_normal_file(file_path)
+
+                self.stats.in_progress -= 1
+                self.stats.completed += 1
+
+                if self.progress:
+                    await self.progress.update(file_path, "Completed")
+
+                return {
+                    "file": str(relative_path),
+                    "full_path": file_path,
+                    "review": review_text,
+                    "status": "completed",
+                    "chunked": is_large_file,
+                    "lines": len(lines),
+                    "timestamp": datetime.now().isoformat(),
+                }
+
+            except Exception as e:
+                self.stats.in_progress -= 1
+                self.stats.errors += 1
+
+                if self.progress:
+                    await self.progress.log(f"Error reviewing {relative_path}: {e}")
+
+                return {
+                    "file": str(relative_path),
+                    "full_path": file_path,
+                    "review": f"Error: {str(e)}",
+                    "status": "error",
+                    "chunked": False,
+                    "lines": len(lines),
+                    "timestamp": datetime.now().isoformat(),
+                }
+
+    async def _review_normal_file(self, file_path: str) -> str:
+        """Review a normal-sized file using the agent."""
+        prompt = f"""Review this file: {file_path}
 
 Instructions:
-1. Read the file completely (use multiple reads if needed for large files)
-2. After reading ALL content, provide your review
+1. Read the file completely
+2. Provide your review in the specified format
 3. Focus on critical issues only. Be concise.
 4. Do NOT output any planning text - only output the final review."""
 
-            options = ClaudeAgentOptions(
-                allowed_tools=["Read"],
-                system_prompt=self._get_system_prompt(),
-                cwd=str(self.target_path),
-                permission_mode="bypassPermissions",
-                max_turns=10,  # Allow more turns for large files
-            )
+        options = ClaudeAgentOptions(
+            allowed_tools=["Read"],
+            system_prompt=self._get_system_prompt(),
+            cwd=str(self.target_path),
+            permission_mode="bypassPermissions",
+            max_turns=5,
+        )
 
-            review_content = []
+        review_content = []
 
-            for attempt in range(self.retry_count + 1):
-                try:
-                    async for message in query(prompt=prompt, options=options):
-                        if isinstance(message, AssistantMessage):
-                            for block in message.content:
-                                if isinstance(block, TextBlock):
-                                    review_content.append(block.text)
-                        elif isinstance(message, ResultMessage):
-                            if message.result:
-                                review_content.append(message.result)
+        for attempt in range(self.retry_count + 1):
+            try:
+                async for message in query(prompt=prompt, options=options):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                review_content.append(block.text)
+                    elif isinstance(message, ResultMessage):
+                        if message.result:
+                            review_content.append(message.result)
 
-                    # Filter out planning/intermediate text, keep only the final review
-                    review_text = "\n".join(review_content)
-                    review_text = self._extract_final_review(review_text)
+                review_text = "\n".join(review_content)
+                return self._extract_final_review(review_text)
 
-                    self.stats.in_progress -= 1
-                    self.stats.completed += 1
+            except Exception as e:
+                if attempt < self.retry_count:
+                    await asyncio.sleep(2 ** attempt)
+                    review_content = []
+                    continue
+                raise
 
-                    if self.progress:
-                        await self.progress.update(file_path, "Completed")
-
-                    return {
-                        "file": str(relative_path),
-                        "full_path": file_path,
-                        "review": review_text,
-                        "status": "completed",
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-                except Exception as e:
-                    if attempt < self.retry_count:
-                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                        review_content = []
-                        continue
-
-                    self.stats.in_progress -= 1
-                    self.stats.errors += 1
-
-                    if self.progress:
-                        await self.progress.log(f"Error reviewing {relative_path}: {e}")
-
-                    return {
-                        "file": str(relative_path),
-                        "full_path": file_path,
-                        "review": f"Error: {str(e)}",
-                        "status": "error",
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-            # Should not reach here
-            return {
-                "file": str(relative_path),
-                "full_path": file_path,
-                "review": "Unknown error",
-                "status": "error",
-                "timestamp": datetime.now().isoformat(),
-            }
+        return "Review failed after retries"
 
     async def _review_files_parallel(self, files: list[str]) -> list[dict]:
         """Review multiple files in parallel with controlled concurrency."""
@@ -270,27 +434,26 @@ Instructions:
         self.progress = ProgressDisplay(self.stats)
 
         print(f"\nStarting parallel review with {self.concurrency} concurrent workers...")
+        print(f"Large file threshold: {self.large_file_threshold} lines (chunk size: {self.chunk_lines})")
         print("-" * 80)
 
-        # Create tasks for all files
         tasks = [
             self._review_single_file(file_path, semaphore)
             for file_path in files
         ]
 
-        # Execute all tasks concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Process results
         reviews = []
         for result in results:
             if isinstance(result, Exception):
-                # Handle unexpected exceptions
                 reviews.append({
                     "file": "unknown",
                     "full_path": "unknown",
                     "review": f"Unexpected error: {str(result)}",
                     "status": "error",
+                    "chunked": False,
+                    "lines": 0,
                     "timestamp": datetime.now().isoformat(),
                 })
             else:
@@ -303,10 +466,8 @@ Instructions:
         """Generate an overall summary of all reviews."""
         print("\nGenerating overall summary...")
 
-        # Only include completed reviews, limit to avoid token overflow
         completed_reviews = [r for r in self.reviews if r["status"] == "completed"]
 
-        # If too many reviews, sample them
         if len(completed_reviews) > 50:
             import random
             sampled = random.sample(completed_reviews, 50)
@@ -366,6 +527,7 @@ Provide:
             f"**Files Reviewed**: {len(self.reviews)}",
             f"**File Types**: {', '.join(self.file_extensions)}",
             f"**Concurrency**: {self.concurrency} workers",
+            f"**Chunked Files**: {self.stats.chunked_files}",
             f"**Total Time**: {elapsed}",
             f"**Throughput**: {self.stats.files_per_second:.2f} files/sec",
             "",
@@ -383,9 +545,11 @@ Provide:
 
         for i, review in enumerate(self.reviews, 1):
             status_emoji = "✅" if review["status"] == "completed" else "❌"
+            chunked_tag = " [chunked]" if review.get("chunked") else ""
+            lines_info = f" ({review.get('lines', '?')} lines)"
             report_lines.extend(
                 [
-                    f"### {i}. {review['file']} {status_emoji}",
+                    f"### {i}. {review['file']}{chunked_tag}{lines_info} {status_emoji}",
                     "",
                     review["review"],
                     "",
@@ -394,7 +558,6 @@ Provide:
                 ]
             )
 
-        # Add statistics
         completed = sum(1 for r in self.reviews if r["status"] == "completed")
         errors = sum(1 for r in self.reviews if r["status"] == "error")
 
@@ -405,6 +568,7 @@ Provide:
                 f"- **Total Files**: {len(self.reviews)}",
                 f"- **Successfully Reviewed**: {completed}",
                 f"- **Errors**: {errors}",
+                f"- **Chunked Reviews**: {self.stats.chunked_files}",
                 f"- **Success Rate**: {completed/len(self.reviews)*100:.1f}%",
                 f"- **Total Time**: {elapsed}",
                 f"- **Average Time per File**: {self.stats.elapsed_seconds/len(self.reviews):.2f}s",
@@ -417,29 +581,24 @@ Provide:
     async def run(self) -> str:
         """Run the complete code review process."""
         print("=" * 60)
-        print("Code Review Agent - Parallel Mode")
+        print("Code Review Agent - Parallel Mode with Chunked Review")
         print("=" * 60)
 
-        # Step 1: Discover files
         files = await self._discover_files()
 
         if not files:
             print("No files found to review!")
             return ""
 
-        # Step 2: Review files in parallel
         self.reviews = await self._review_files_parallel(files)
 
-        # Step 3: Generate summary
         if len(self.reviews) > 1:
             self.summary = await self._generate_summary()
         else:
             self.summary = self.reviews[0]["review"] if self.reviews else "No reviews generated."
 
-        # Step 4: Generate report
         report = self._generate_report()
 
-        # Step 5: Save report
         output_path = self.target_path / self.output_file
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(report)
@@ -448,6 +607,7 @@ Provide:
         print(f"Review Complete!")
         print(f"Total time: {self.stats.format_time(self.stats.elapsed_seconds)}")
         print(f"Files reviewed: {self.stats.completed} success, {self.stats.errors} errors")
+        print(f"Chunked files: {self.stats.chunked_files}")
         print(f"Throughput: {self.stats.files_per_second:.2f} files/sec")
         print(f"Report saved to: {output_path}")
         print("=" * 60)
@@ -457,7 +617,7 @@ Provide:
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Code Review Agent - Parallel automated code review using Claude"
+        description="Code Review Agent - Parallel automated code review with chunked large file support"
     )
     parser.add_argument(
         "path",
@@ -499,6 +659,18 @@ async def main():
         default=2,
         help="Number of retries on failure (default: 2)",
     )
+    parser.add_argument(
+        "--chunk-lines",
+        type=int,
+        default=DEFAULT_CHUNK_LINES,
+        help=f"Lines per chunk for large files (default: {DEFAULT_CHUNK_LINES})",
+    )
+    parser.add_argument(
+        "--large-file-threshold",
+        type=int,
+        default=DEFAULT_LARGE_FILE_LINES,
+        help=f"Line threshold for chunked review (default: {DEFAULT_LARGE_FILE_LINES})",
+    )
 
     args = parser.parse_args()
 
@@ -511,6 +683,8 @@ async def main():
         max_files=args.max_files,
         concurrency=args.concurrency,
         retry_count=args.retry,
+        chunk_lines=args.chunk_lines,
+        large_file_threshold=args.large_file_threshold,
     )
 
     await agent.run()
