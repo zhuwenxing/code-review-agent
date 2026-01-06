@@ -19,7 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
+from pathspec import PathSpec
+from pathspec.patterns.gitwildmatch import GitWildMatchPattern
 
 from claude_agent_sdk import (
     query,
@@ -37,77 +38,95 @@ DEFAULT_LARGE_FILE_LINES = 800
 
 
 class GitignoreParser:
-    """Simple .gitignore parser."""
+    """Parse .gitignore files using pathspec library with hierarchical support."""
 
     def __init__(self, root_path: Path):
         self.root_path = root_path
-        self.patterns = []
-        gitignore_path = root_path / ".gitignore"
-        if gitignore_path.exists():
-            self._parse_gitignore(gitignore_path)
+        # Map from relative directory path to its PathSpec
+        # Path() represents the root directory's .gitignore
+        self.gitignore_specs: dict[Path, PathSpec] = {}
+        self._scan_all_gitignores()
 
-    def _parse_gitignore(self, gitignore_path: Path):
-        """Parse .gitignore file and extract patterns."""
-        with open(gitignore_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if not line or line.startswith("#"):
-                    continue
-                self.patterns.append(line)
+    def _scan_all_gitignores(self):
+        """Scan and parse all .gitignore files in the directory tree."""
+        # Find root .gitignore
+        root_gitignore = self.root_path / ".gitignore"
+        if root_gitignore.exists():
+            self._parse_gitignore(root_gitignore, Path("."))
+
+        # Find all nested .gitignore files
+        for gitignore_path in self.root_path.rglob(".gitignore"):
+            if gitignore_path == root_gitignore:
+                continue  # Already processed
+
+            rel_dir = gitignore_path.parent.relative_to(self.root_path)
+            self._parse_gitignore(gitignore_path, rel_dir)
+
+    def _parse_gitignore(self, gitignore_path: Path, rel_dir: Path):
+        """Parse a single .gitignore file and store its PathSpec."""
+        try:
+            with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+                patterns = f.readlines()
+
+            # Filter out empty lines and comments, strip whitespace
+            filtered_patterns = [
+                line.strip() for line in patterns
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+            if filtered_patterns:
+                spec = PathSpec.from_lines(GitWildMatchPattern, filtered_patterns)
+                self.gitignore_specs[rel_dir] = spec
+        except Exception as e:
+            print(f"  Warning: Failed to parse {gitignore_path}: {e}")
 
     def is_ignored(self, file_path: Path) -> bool:
-        """Check if a file matches any ignore pattern."""
-        try:
-            rel_path = file_path.relative_to(self.root_path)
-        except ValueError:
+        """Check if a file matches any ignore pattern from hierarchical .gitignore files."""
+        if not self.gitignore_specs:
             return False
 
-        path_str = str(rel_path)
-        path_parts = path_str.split("/")
+        try:
+            # Get relative path from root
+            rel_path = file_path.relative_to(self.root_path)
+        except ValueError:
+            # File is not under root_path
+            return False
 
+        # Convert to POSIX-style path for pathspec
+        path_str = str(rel_path).replace("\\", "/")
+
+        # Check all .gitignore files from root to the file's directory
+        # Git processes .gitignore files from shallow to deep
         ignored = False
-        for pattern in self.patterns:
-            if self._match_pattern(path_str, path_parts, pattern):
-                if pattern.startswith("!"):
-                    # Negation pattern - unignore
-                    ignored = False
+        checked_specs = []
+
+        # Sort directories by depth (shallow to deep)
+        sorted_dirs = sorted(
+            self.gitignore_specs.keys(),
+            key=lambda p: len(p.parts)
+        )
+
+        for gitignore_dir in sorted_dirs:
+            # Only check .gitignore files that are ancestors of the file
+            try:
+                if gitignore_dir == Path("."):
+                    # Root .gitignore applies to all files
+                    rel_to_gitignore = path_str
                 else:
-                    # Normal ignore pattern
+                    # Check if file is under this .gitignore's directory
+                    rel_to_gitignore = rel_path.relative_to(gitignore_dir)
+
+                spec = self.gitignore_specs[gitignore_dir]
+                checked_specs.append(gitignore_dir)
+
+                if spec.match_file(str(rel_to_gitignore).replace("\\", "/")):
                     ignored = True
 
+            except ValueError:
+                # File is not under this .gitignore's directory
+                continue
+
         return ignored
-
-    def _match_pattern(self, path_str: str, path_parts: list[str], pattern: str) -> bool:
-        """Check if path matches a gitignore pattern."""
-        # Remove negation prefix for matching
-        if pattern.startswith("!"):
-            pattern = pattern[1:]
-
-        # Directory pattern (ends with /)
-        if pattern.endswith("/"):
-            pattern = pattern[:-1]
-
-        # Check if pattern is a directory name (no slash)
-        # If so, it should match the directory itself or anything under it
-        if "/" not in pattern and "*" not in pattern and "?" not in pattern and "[" not in pattern:
-            # Simple directory name like ".venv"
-            if pattern in path_parts:
-                return True
-
-        # Check if any part of the path matches
-        for i in range(len(path_parts)):
-            subpath = "/".join(path_parts[i:])
-
-            # Match with fnmatch
-            if fnmatch(subpath, pattern) or fnmatch(path_str, pattern):
-                return True
-
-            # Match basename only
-            if fnmatch(path_parts[-1], pattern):
-                return True
-
-        return False
 
 
 @dataclass
