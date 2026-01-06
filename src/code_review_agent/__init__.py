@@ -1,5 +1,7 @@
 """Code Review Agent - Intelligent code review tool with incremental support."""
 
+from importlib.metadata import version
+
 from .agent import CodeReviewAgent
 from .constants import (
     DEFAULT_CHUNK_LINES,
@@ -14,7 +16,7 @@ from .llm import ClaudeAgent, GeminiAgent, LLMAgent, create_agent
 from .progress import ProgressDisplay, ReviewStats
 from .state import FileReviewState, ReviewSessionState, ReviewStateManager
 
-__version__ = "0.4.0"
+__version__ = version("code-review-agent")
 __all__ = [
     "CodeReviewAgent",
     "GitignoreParser",
