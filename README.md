@@ -16,6 +16,14 @@
 
 ## 安装
 
+### 从 PyPI 安装（推荐）
+
+```bash
+pip install code-review-agent
+```
+
+### 从源码安装
+
 ```bash
 # 克隆仓库
 git clone https://github.com/zhuwenxing/code-review-agent.git

@@ -16,6 +16,14 @@ An intelligent code review tool supporting both Claude and Gemini LLM engines, f
 
 ## Installation
 
+### From PyPI (Recommended)
+
+```bash
+pip install code-review-agent
+```
+
+### From Source
+
 ```bash
 # Clone the repository
 git clone https://github.com/zhuwenxing/code-review-agent.git
