@@ -78,7 +78,7 @@ from .constants import (
 )
 @click.option("--resume/--no-resume", "resume", default=True, help="Enable/disable resuming from previous session")
 @click.option("--debug", is_flag=True, help="Enable debug mode with full stack traces")
-@click.version_option(version=__version__, prog_name="code-review")
+@click.version_option(version=__version__, prog_name="code-review-agent")
 def main(
     path: Path,
     extensions: str,
