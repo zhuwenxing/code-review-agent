@@ -50,13 +50,13 @@ code-review-agent --agent claude
 Incremental review mode is enabled by default, only reviewing files changed since the last run:
 
 ```bash
-# Normal run (automatic incremental review)
+# Normal run (automatic incremental review of the current directory)
 code-review-agent
 
-# Force full review (ignore previous state)
+# Force full review (ignore previous state, can be used with a path)
 code-review-agent --force-full
 
-# Disable session resume
+# Disable session resume (can be used with a path)
 code-review-agent --no-resume
 ```
 

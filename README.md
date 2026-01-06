@@ -50,13 +50,13 @@ code-review-agent --agent claude
 默认启用增量审查模式，仅审查自上次运行以来变更的文件：
 
 ```bash
-# 正常运行（自动增量审查）
+# 正常运行（自动增量审查当前目录）
 code-review-agent
 
-# 强制全量审查（忽略之前的状态）
+# 强制全量审查（忽略之前的状态，可与路径参数一同使用）
 code-review-agent --force-full
 
-# 禁用断点续传
+# 禁用断点续传（可与路径参数一同使用）
 code-review-agent --no-resume
 ```
 
