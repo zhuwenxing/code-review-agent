@@ -30,13 +30,13 @@ from .constants import (
     "-e",
     "--extensions",
     default=DEFAULT_EXTENSIONS,
-    help=f"File extensions to review, comma-separated (default: {DEFAULT_EXTENSIONS})",
+    help="File extensions to review, comma-separated (default: %(default)s)",
 )
 @click.option(
     "-o",
     "--output-dir",
     default=DEFAULT_OUTPUT_DIR,
-    help=f"Output directory for reviews (default: {DEFAULT_OUTPUT_DIR})",
+    help="Output directory for reviews (default: %(default)s)",
 )
 @click.option("-m", "--max-files", type=int, default=None, help="Maximum number of files to review")
 @click.option(
@@ -44,26 +44,26 @@ from .constants import (
     "--concurrency",
     type=click.IntRange(min=1),
     default=DEFAULT_CONCURRENCY,
-    help=f"Number of concurrent review workers (default: {DEFAULT_CONCURRENCY})",
+    help="Number of concurrent review workers (default: %(default)s)",
 )
 @click.option(
     "-r",
     "--retry",
     type=click.IntRange(min=0),
     default=DEFAULT_RETRY_COUNT,
-    help=f"Number of retries on failure (default: {DEFAULT_RETRY_COUNT})",
+    help="Number of retries on failure (default: %(default)s)",
 )
 @click.option(
     "--chunk-lines",
     type=click.IntRange(min=50),
     default=DEFAULT_CHUNK_LINES,
-    help=f"Lines per chunk for large files (default: {DEFAULT_CHUNK_LINES})",
+    help="Lines per chunk for large files (default: %(default)s)",
 )
 @click.option(
     "--large-file-threshold",
     type=click.IntRange(min=50),
     default=DEFAULT_LARGE_FILE_LINES,
-    help=f"Line threshold for chunked review (default: {DEFAULT_LARGE_FILE_LINES})",
+    help="Line threshold for chunked review (default: %(default)s)",
 )
 @click.option("--skip-explore", is_flag=True, help="Skip codebase exploration phase")
 @click.option(
@@ -71,7 +71,7 @@ from .constants import (
     "--agent",
     type=click.Choice(["claude", "gemini"], case_sensitive=False),
     default="gemini",
-    help="LLM agent to use for code review (default: gemini)",
+    help="LLM agent to use for code review (default: %(default)s)",
 )
 @click.option(
     "--force-full", is_flag=True, help="Force full review, ignoring previous state (disables incremental mode)"
