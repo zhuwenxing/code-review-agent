@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Union
 
 
 class LLMAgent(ABC):
@@ -13,10 +12,10 @@ class LLMAgent(ABC):
         self,
         prompt: str,
         system_prompt: str = "",
-        allowed_tools: Optional[list[str]] = None,
-        cwd: Union[str, Path] = ".",
+        allowed_tools: list[str] | None = None,
+        cwd: str | Path = ".",
         max_turns: int = 10,
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
     ) -> str:
         """Send a query to the LLM and return the text response.
 

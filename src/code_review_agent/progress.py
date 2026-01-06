@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 # Default throttle interval for UI updates (in seconds)
 DEFAULT_THROTTLE_INTERVAL = 0.1  # 100ms
 
@@ -16,6 +15,7 @@ class ReviewStats:
 
     Thread-safe statistics tracking for concurrent review operations.
     """
+
     total_files: int = 0
     completed: int = 0
     errors: int = 0
@@ -44,9 +44,9 @@ class ReviewStats:
         if seconds < 60:
             return f"{seconds:.1f}s"
         elif seconds < 3600:
-            return f"{seconds/60:.1f}m"
+            return f"{seconds / 60:.1f}m"
         else:
-            return f"{seconds/3600:.1f}h"
+            return f"{seconds / 3600:.1f}h"
 
     def get_snapshot(self) -> dict:
         """Get a consistent snapshot of all stats for display.
@@ -105,7 +105,7 @@ class ProgressDisplay:
                 return f"{name[:half]}...{name[-half:]}{ext}"
 
         # Fallback: simple truncation with ellipsis
-        return f"{filename[:self._max_filename_len - 3]}..."
+        return f"{filename[: self._max_filename_len - 3]}..."
 
     async def update(self, file_path: str, status: str, force: bool = False):
         """Update progress display with throttling.
@@ -136,10 +136,14 @@ class ProgressDisplay:
             elapsed = self.stats.format_time(snapshot["elapsed_seconds"])
             filename = self._truncate_filename(Path(file_path).name)
 
-            print(f"\r[{progress:5.1f}%] {completed}/{total} done | "
-                  f"{in_progress} active | "
-                  f"Elapsed: {elapsed} | ETA: {eta} | "
-                  f"{status}: {filename:<{self._max_filename_len}}", end="", flush=True)
+            print(
+                f"\r[{progress:5.1f}%] {completed}/{total} done | "
+                f"{in_progress} active | "
+                f"Elapsed: {elapsed} | ETA: {eta} | "
+                f"{status}: {filename:<{self._max_filename_len}}",
+                end="",
+                flush=True,
+            )
 
     async def log(self, message: str):
         """Log a message to the console (bypasses throttling)."""

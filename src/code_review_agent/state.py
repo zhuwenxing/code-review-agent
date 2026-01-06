@@ -3,10 +3,11 @@
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+
+import aiofiles
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +15,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FileReviewState:
     """State of a single file review."""
+
     file_path: str  # Relative path from root
     content_hash: str  # SHA256 hash of file content
     status: str  # "pending", "in_progress", "completed", "error"
-    review_time: Optional[str] = None  # ISO format timestamp
-    error_message: Optional[str] = None
+    review_time: str | None = None  # ISO format timestamp
+    error_message: str | None = None
     lines: int = 0
     chunked: bool = False
 
@@ -26,6 +28,7 @@ class FileReviewState:
 @dataclass
 class ReviewSessionState:
     """State of an entire review session."""
+
     session_id: str
     root_path: str
     started_at: str
@@ -77,32 +80,56 @@ class ReviewStateManager:
         self.output_dir = output_dir
         self.root_path = root_path
         self.state_file = output_dir / self.STATE_FILE_NAME
-        self.state: Optional[ReviewSessionState] = None
+        self.state: ReviewSessionState | None = None
 
-    def _compute_file_hash(self, file_path: Path) -> str:
+    async def _compute_file_hash(self, file_path: Path) -> str:
         """Compute SHA256 hash of file content using chunked reading.
 
         Reads file in 64KB chunks to avoid memory issues with large files.
         """
+        content_hash, _ = await self._compute_file_hash_and_lines(file_path)
+        return content_hash
+
+    async def _compute_file_hash_and_lines(self, file_path: Path) -> tuple[str, int]:
+        """Compute SHA256 hash and line count in a single file read.
+
+        Reads file in 64KB chunks to avoid memory issues with large files.
+        Counts newlines during the hash computation to avoid redundant I/O.
+
+        Returns:
+            Tuple of (content_hash, line_count). Returns ("", 0) on error.
+        """
         try:
             sha256_hash = hashlib.sha256()
-            with open(file_path, "rb") as f:
+            line_count = 0
+            file_size = 0
+            ends_with_newline = False
+            async with aiofiles.open(file_path, "rb") as f:
                 # Read in 64KB chunks to avoid loading entire file into memory
-                while chunk := f.read(65536):
+                while chunk := await f.read(65536):
+                    file_size += len(chunk)
                     sha256_hash.update(chunk)
-            return sha256_hash.hexdigest()
-        except Exception as e:
+                    # Count newlines in this chunk
+                    line_count += chunk.count(b"\n")
+                    if chunk:
+                        ends_with_newline = chunk.endswith(b"\n")
+            # If file is not empty and doesn't end with newline, the last line was not counted
+            if file_size > 0 and not ends_with_newline:
+                line_count += 1
+            return sha256_hash.hexdigest(), line_count
+        except OSError as e:
             logger.warning(f"Failed to hash {file_path}: {e}")
-            return ""
+            return "", 0
 
-    def load_state(self) -> Optional[ReviewSessionState]:
+    async def load_state(self) -> ReviewSessionState | None:
         """Load existing state from file if available."""
         if not self.state_file.exists():
             return None
 
         try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            async with aiofiles.open(self.state_file, encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
             self.state = ReviewSessionState.from_dict(data)
             logger.info(f"Loaded existing state: {self.state.completed_files}/{self.state.total_files} completed")
             return self.state
@@ -110,7 +137,7 @@ class ReviewStateManager:
             logger.warning(f"Failed to load state file: {e}")
             return None
 
-    def save_state(self):
+    async def save_state(self):
         """Save current state to file."""
         if not self.state:
             return
@@ -119,8 +146,9 @@ class ReviewStateManager:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(self.state.to_dict(), f, indent=2, ensure_ascii=False)
+            state_json = json.dumps(self.state.to_dict(), indent=2, ensure_ascii=False)
+            async with aiofiles.open(self.state_file, "w", encoding="utf-8") as f:
+                await f.write(state_json)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
 
@@ -143,7 +171,7 @@ class ReviewStateManager:
         )
         return self.state
 
-    def should_review_file(self, file_path: Path, force: bool = False) -> tuple[bool, str, str]:
+    async def should_review_file(self, file_path: Path, force: bool = False) -> tuple[bool, str, str, int]:
         """Check if a file should be reviewed.
 
         Args:
@@ -151,42 +179,42 @@ class ReviewStateManager:
             force: If True, always review regardless of state
 
         Returns:
-            Tuple of (should_review, reason, content_hash)
-            The content_hash can be reused by register_file to avoid duplicate I/O.
+            Tuple of (should_review, reason, content_hash, line_count)
+            The content_hash and line_count can be reused by register_file to avoid duplicate I/O.
         """
         if force:
-            current_hash = self._compute_file_hash(file_path)
-            return True, "forced", current_hash
+            current_hash, lines = await self._compute_file_hash_and_lines(file_path)
+            return True, "forced", current_hash, lines
 
         if not self.state:
-            current_hash = self._compute_file_hash(file_path)
-            return True, "no_state", current_hash
+            current_hash, lines = await self._compute_file_hash_and_lines(file_path)
+            return True, "no_state", current_hash, lines
 
         rel_path = str(file_path.relative_to(self.root_path))
-        current_hash = self._compute_file_hash(file_path)
+        current_hash, lines = await self._compute_file_hash_and_lines(file_path)
 
         if rel_path not in self.state.files:
-            return True, "new_file", current_hash
+            return True, "new_file", current_hash, lines
 
         file_state = self.state.files[rel_path]
 
         # Check if file content changed
         if file_state.content_hash != current_hash:
-            return True, "content_changed", current_hash
+            return True, "content_changed", current_hash, lines
 
         # Check if previous review was successful
         if file_state.status == "completed":
-            return False, "unchanged", current_hash
+            return False, "unchanged", current_hash, lines
 
         if file_state.status == "error":
-            return True, "retry_error", current_hash
+            return True, "retry_error", current_hash, lines
 
         if file_state.status == "in_progress":
-            return True, "incomplete", current_hash
+            return True, "incomplete", current_hash, lines
 
-        return True, "unknown_status", current_hash
+        return True, "unknown_status", current_hash, lines
 
-    def register_file(self, file_path: Path, lines: int = 0, content_hash: str = ""):
+    async def register_file(self, file_path: Path, lines: int = 0, content_hash: str = ""):
         """Register a file for review.
 
         Args:
@@ -201,7 +229,7 @@ class ReviewStateManager:
         rel_path = str(file_path.relative_to(self.root_path))
         # Reuse provided hash or compute if not provided
         if not content_hash:
-            content_hash = self._compute_file_hash(file_path)
+            content_hash = await self._compute_file_hash(file_path)
 
         self.state.files[rel_path] = FileReviewState(
             file_path=rel_path,
@@ -270,7 +298,8 @@ class ReviewStateManager:
             return []
 
         return [
-            rel_path for rel_path, file_state in self.state.files.items()
+            rel_path
+            for rel_path, file_state in self.state.files.items()
             if file_state.status in ("pending", "in_progress", "error")
         ]
 
@@ -285,7 +314,10 @@ class ReviewStateManager:
             "completed": self.state.completed_files,
             "errors": self.state.error_files,
             "skipped": self.state.skipped_files,
-            "pending": self.state.total_files - self.state.completed_files - self.state.error_files - self.state.skipped_files,
+            "pending": self.state.total_files
+            - self.state.completed_files
+            - self.state.error_files
+            - self.state.skipped_files,
         }
 
     def clear_state(self):

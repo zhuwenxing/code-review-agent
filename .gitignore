@@ -14,6 +14,8 @@ wheels/
 test_code/
 test_large/
 reviews/
-*.md
-!README.md
+
+# code agent
+claude.md
+agent.md
 

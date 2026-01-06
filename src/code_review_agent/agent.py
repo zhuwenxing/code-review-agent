@@ -8,14 +8,18 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import aiofiles
 
-from .constants import DEFAULT_CHUNK_LINES, DEFAULT_LARGE_FILE_LINES, ENV_VARS_TO_PASS
+from .constants import (
+    DEFAULT_CHUNK_LINES,
+    DEFAULT_LARGE_FILE_LINES,
+    ENV_VARS_TO_PASS,
+    MAX_CONCURRENT_CHUNK_REVIEWS,
+)
 from .gitignore import GitignoreParser
-from .llm import create_agent, LLMAgent
-from .progress import ReviewStats, ProgressDisplay
+from .llm import LLMAgent, create_agent
+from .progress import ProgressDisplay, ReviewStats
 from .state import ReviewStateManager
 
 logger = logging.getLogger(__name__)
@@ -45,7 +49,7 @@ class CodeReviewAgent:
         target_path: str,
         file_extensions: list[str],
         output_dir: str = "reviews",
-        max_files: Optional[int] = None,
+        max_files: int | None = None,
         concurrency: int = 5,
         retry_count: int = 2,
         chunk_lines: int = DEFAULT_CHUNK_LINES,
@@ -88,7 +92,7 @@ class CodeReviewAgent:
         self.codebase_context: str = ""
         self.specific_rules: str = ""
         self.stats = ReviewStats()
-        self.progress: Optional[ProgressDisplay] = None
+        self.progress: ProgressDisplay | None = None
         self._save_lock = asyncio.Lock()
         self._stats_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
@@ -167,7 +171,7 @@ class CodeReviewAgent:
             )
 
             # Extract JSON from result
-            json_match = re.search(r'\{[\s\S]*\}', result)
+            json_match = re.search(r"\{[\s\S]*\}", result)
             if json_match:
                 try:
                     context = json.loads(json_match.group())
@@ -272,17 +276,14 @@ class CodeReviewAgent:
         skipped_count = 0
 
         for file_path in all_files:
-            should_review, reason, content_hash = self.state_manager.should_review_file(
+            # Get hash and line count in a single file read to avoid redundant I/O
+            should_review, reason, content_hash, lines = await self.state_manager.should_review_file(
                 file_path, force=self.force_full
             )
             if should_review:
                 files_to_review.append(str(file_path))
-                # Register file in state, reusing the already computed hash
-                try:
-                    lines = len(file_path.read_text(encoding="utf-8", errors="replace").splitlines())
-                except Exception:
-                    lines = 0
-                self.state_manager.register_file(file_path, lines, content_hash)
+                # Register file in state, reusing the already computed hash and line count
+                await self.state_manager.register_file(file_path, lines, content_hash)
             else:
                 skipped_count += 1
                 self.state_manager.mark_skipped(file_path)
@@ -310,18 +311,18 @@ class CodeReviewAgent:
             IOError: If file cannot be read (permission denied, not found, etc.)
         """
         try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            async with aiofiles.open(file_path, encoding="utf-8", errors="replace") as f:
                 content = await f.read()
                 return content.splitlines(keepends=True)
         except PermissionError as e:
             logger.warning(f"Permission denied reading file {file_path}: {e}")
-            raise IOError(f"Permission denied: {file_path}") from e
+            raise OSError(f"Permission denied: {file_path}") from e
         except FileNotFoundError as e:
             logger.warning(f"File not found: {file_path}")
-            raise IOError(f"File not found: {file_path}") from e
+            raise OSError(f"File not found: {file_path}") from e
         except OSError as e:
             logger.warning(f"OS error reading file {file_path}: {e}")
-            raise IOError(f"Cannot read file {file_path}: {e}") from e
+            raise OSError(f"Cannot read file {file_path}: {e}") from e
 
     async def _save_review(self, review: dict):
         """Save individual review to file with hierarchical directory structure."""
@@ -333,16 +334,16 @@ class CodeReviewAgent:
             # Create parent directories
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            content = f"""# 代码审查：{review['file']}
+            content = f"""# 代码审查：{review["file"]}
 
-**审查时间**：{review['timestamp']}
-**行数**：{review.get('lines', 'N/A')}
-**分块**：{'是' if review.get('chunked') else '否'}
-**状态**：{review['status']}
+**审查时间**：{review["timestamp"]}
+**行数**：{review.get("lines", "N/A")}
+**分块**：{"是" if review.get("chunked") else "否"}
+**状态**：{review["status"]}
 
 ---
 
-{review['review']}
+{review["review"]}
 """
             async with aiofiles.open(output_file, "w", encoding="utf-8") as f:
                 await f.write(content)
@@ -407,7 +408,7 @@ class CodeReviewAgent:
         """
         try:
             lines = await self._read_file_lines(file_path)
-        except IOError as e:
+        except OSError as e:
             return f"Error: {e}"
         if not lines:
             return "Error: File is empty"
@@ -424,8 +425,8 @@ class CodeReviewAgent:
         if self.progress:
             await self.progress.log(f"  Large file ({total_lines} lines) -> {len(chunks)} chunks")
 
-        # Use semaphore to limit concurrent chunk reviews (max 3 concurrent chunks)
-        chunk_semaphore = asyncio.Semaphore(min(3, self.concurrency))
+        # Use semaphore to limit concurrent chunk reviews to avoid LLM rate limits
+        chunk_semaphore = asyncio.Semaphore(min(MAX_CONCURRENT_CHUNK_REVIEWS, self.concurrency))
 
         async def review_chunk_with_semaphore(idx: int, content: str, start: int, end: int) -> tuple[int, str]:
             async with chunk_semaphore:
@@ -434,14 +435,13 @@ class CodeReviewAgent:
 
         # Review chunks in parallel
         tasks = [
-            review_chunk_with_semaphore(idx, content, start, end)
-            for idx, (content, start, end) in enumerate(chunks, 1)
+            review_chunk_with_semaphore(idx, content, start, end) for idx, (content, start, end) in enumerate(chunks, 1)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Sort by chunk index and collect reviews, handling errors
         chunk_reviews = []
-        for result in sorted(results, key=lambda x: x[0] if isinstance(x, tuple) else float('inf')):
+        for result in sorted(results, key=lambda x: x[0] if isinstance(x, tuple) else float("inf")):
             if isinstance(result, tuple):
                 chunk_reviews.append(result[1])
             elif isinstance(result, Exception):
@@ -472,9 +472,9 @@ class CodeReviewAgent:
                 )
                 return self._extract_final_review(result)
 
-            except Exception as e:
+            except Exception:
                 if attempt < self.retry_count:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
                 raise
 
@@ -517,7 +517,7 @@ class CodeReviewAgent:
     async def _save_state(self):
         """Thread-safe state save."""
         async with self._state_lock:
-            self.state_manager.save_state()
+            await self.state_manager.save_state()
 
     async def _review_single_file(self, file_path: str, semaphore: asyncio.Semaphore) -> dict:
         """Review a single file and save immediately."""
@@ -535,7 +535,7 @@ class CodeReviewAgent:
             # Try to read file lines
             try:
                 lines = await self._read_file_lines(file_path)
-            except IOError as e:
+            except OSError as e:
                 await self._update_stats(in_progress_delta=-1, errors_delta=1)
                 self.state_manager.mark_error(full_path, str(e))
                 await self._save_state()
@@ -626,14 +626,16 @@ class CodeReviewAgent:
         reviews = []
         for result in results:
             if isinstance(result, Exception):
-                reviews.append({
-                    "file": "unknown",
-                    "review": f"Unexpected error: {str(result)}",
-                    "status": "error",
-                    "chunked": False,
-                    "lines": 0,
-                    "timestamp": datetime.now().isoformat(),
-                })
+                reviews.append(
+                    {
+                        "file": "unknown",
+                        "review": f"Unexpected error: {str(result)}",
+                        "status": "error",
+                        "chunked": False,
+                        "lines": 0,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
             else:
                 reviews.append(result)
 
@@ -648,15 +650,12 @@ class CodeReviewAgent:
 
         if len(completed_reviews) > 50:
             import random
+
             sampled = random.sample(completed_reviews, 50)
-            reviews_text = "\n\n".join(
-                [f"**{r['file']}**:\n{r['review'][:500]}" for r in sampled]
-            )
+            reviews_text = "\n\n".join([f"**{r['file']}**:\n{r['review'][:500]}" for r in sampled])
             reviews_text = f"(抽样 50 个，共 {len(completed_reviews)} 个审查)\n\n" + reviews_text
         else:
-            reviews_text = "\n\n".join(
-                [f"**{r['file']}**:\n{r['review'][:500]}" for r in completed_reviews]
-            )
+            reviews_text = "\n\n".join([f"**{r['file']}**:\n{r['review'][:500]}" for r in completed_reviews])
 
         prompt = f"""总结以下代码审查：
 
@@ -697,12 +696,18 @@ class CodeReviewAgent:
         success_rate = (completed / total_reviews * 100) if total_reviews > 0 else 0
         avg_time_per_file = (self.stats.elapsed_seconds / total_reviews) if total_reviews > 0 else 0
 
+        # Build context block (avoid backslash in f-string)
+        if self.codebase_context:
+            context_block = f"```json\n{self.codebase_context}\n```"
+        else:
+            context_block = "未执行探索"
+
         report = f"""# 代码审查摘要报告
 
-**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**生成时间**：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 **目标目录**：`{self.target_path}`
 **审查文件数**：{total_reviews}（跳过 {skipped_count} 个未变更文件）
-**文件类型**：{', '.join(self.file_extensions)}
+**文件类型**：{", ".join(self.file_extensions)}
 **使用 Agent**：{self.llm_agent.name}
 **并发数**：{self.concurrency} 个工作线程
 **总耗时**：{elapsed}
@@ -712,9 +717,7 @@ class CodeReviewAgent:
 
 ## 代码库上下文
 
-```json
-{self.codebase_context if self.codebase_context else "未执行探索"}
-```
+{context_block}
 
 ---
 
@@ -772,7 +775,7 @@ class CodeReviewAgent:
             self.state_manager.clear_state()
             self.state_manager.create_new_session(self.agent_type, self.file_extensions)
         elif self.resume:
-            existing_state = self.state_manager.load_state()
+            existing_state = await self.state_manager.load_state()
             if existing_state:
                 print(f"\n发现之前的审查会话：{existing_state.session_id}")
                 print(f"  已完成：{existing_state.completed_files}/{existing_state.total_files}")
@@ -790,13 +793,13 @@ class CodeReviewAgent:
         # Phase 1: Explore codebase (optional)
         if not self.skip_explore:
             await self._explore_codebase()
-            self.state_manager.save_state()
+            await self.state_manager.save_state()
         else:
             print("\n[阶段 1] 跳过代码库探索")
 
         # Phase 2: Discover files (with incremental check)
         files, skipped_count = await self._discover_files()
-        self.state_manager.save_state()
+        await self.state_manager.save_state()
 
         if not files:
             if skipped_count > 0:
@@ -819,7 +822,7 @@ class CodeReviewAgent:
             await f.write(report)
 
         # Final state save
-        self.state_manager.save_state()
+        await self.state_manager.save_state()
 
         print("\n" + "=" * 60)
         print("审查完成！")
