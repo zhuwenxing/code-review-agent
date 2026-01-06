@@ -225,9 +225,9 @@ python code_review_agent.py /path/to/code \
   --skip-explore
 ```
 
-### Arguments
+#### Command-line Arguments
 
-| Argument | Short | Default | Description |
+| Parameter | Short | Default | Description |
 |----------|-------|---------|-------------|
 | `path` | - | - | Path to the directory to review (required) |
 | `--extensions` | `-e` | `py,go,js,ts,java,cpp,c,h` | File extensions to review |
@@ -239,7 +239,7 @@ python code_review_agent.py /path/to/code \
 | `--large-file-threshold` | - | `800` | Line threshold for chunked review |
 | `--skip-explore` | - | `False` | Skip codebase exploration phase |
 
-### Output Structure
+#### Output Structure
 
 ```
 reviews/
@@ -249,7 +249,7 @@ reviews/
 └── ...
 ```
 
-### Review Process
+#### Review Process
 
 The agent runs in 4 phases:
 
@@ -258,7 +258,7 @@ The agent runs in 4 phases:
 3. **Phase 3: Review** - Reviews files in parallel with incremental saves
 4. **Phase 4: Summary** - Generates final summary report
 
-### Standard Review Areas
+#### Standard Review Areas
 
 The agent checks for:
 
@@ -269,7 +269,7 @@ The agent checks for:
 5. **Resources**: Proper cleanup (defer close), context passing
 6. **Performance**: Inefficiencies, memory leaks
 
-### .gitignore Support
+#### .gitignore Support
 
 This tool has full `.gitignore` syntax support:
 
@@ -281,9 +281,9 @@ This tool has full `.gitignore` syntax support:
 
 Implemented using `pathspec` library, matching Git's behavior exactly.
 
-### Example Output
+#### Example Output
 
-#### Individual File Review
+##### Individual File Review
 
 ```markdown
 # Code Review: src/main.py
@@ -305,7 +305,7 @@ Implemented using `pathspec` library, matching Git's behavior exactly.
   - Consider using async/await for I/O operations
 ```
 
-#### Summary Report
+##### Summary Report
 
 ```markdown
 # Code Review Summary Report
