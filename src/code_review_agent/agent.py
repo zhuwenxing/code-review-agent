@@ -277,13 +277,13 @@ class CodeReviewAgent:
 
         for file_path in all_files:
             # Get hash and line count in a single file read to avoid redundant I/O
-            should_review, reason, content_hash, lines = self.state_manager.should_review_file(
+            should_review, reason, content_hash, lines = await self.state_manager.should_review_file(
                 file_path, force=self.force_full
             )
             if should_review:
                 files_to_review.append(str(file_path))
                 # Register file in state, reusing the already computed hash and line count
-                self.state_manager.register_file(file_path, lines, content_hash)
+                await self.state_manager.register_file(file_path, lines, content_hash)
             else:
                 skipped_count += 1
                 self.state_manager.mark_skipped(file_path)
@@ -517,7 +517,7 @@ class CodeReviewAgent:
     async def _save_state(self):
         """Thread-safe state save."""
         async with self._state_lock:
-            self.state_manager.save_state()
+            await self.state_manager.save_state()
 
     async def _review_single_file(self, file_path: str, semaphore: asyncio.Semaphore) -> dict:
         """Review a single file and save immediately."""
@@ -771,7 +771,7 @@ class CodeReviewAgent:
             self.state_manager.clear_state()
             self.state_manager.create_new_session(self.agent_type, self.file_extensions)
         elif self.resume:
-            existing_state = self.state_manager.load_state()
+            existing_state = await self.state_manager.load_state()
             if existing_state:
                 print(f"\n发现之前的审查会话：{existing_state.session_id}")
                 print(f"  已完成：{existing_state.completed_files}/{existing_state.total_files}")
@@ -789,13 +789,13 @@ class CodeReviewAgent:
         # Phase 1: Explore codebase (optional)
         if not self.skip_explore:
             await self._explore_codebase()
-            self.state_manager.save_state()
+            await self.state_manager.save_state()
         else:
             print("\n[阶段 1] 跳过代码库探索")
 
         # Phase 2: Discover files (with incremental check)
         files, skipped_count = await self._discover_files()
-        self.state_manager.save_state()
+        await self.state_manager.save_state()
 
         if not files:
             if skipped_count > 0:
@@ -818,7 +818,7 @@ class CodeReviewAgent:
             await f.write(report)
 
         # Final state save
-        self.state_manager.save_state()
+        await self.state_manager.save_state()
 
         print("\n" + "=" * 60)
         print("审查完成！")
