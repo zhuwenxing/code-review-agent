@@ -20,7 +20,12 @@ from .constants import (
 
 
 @click.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path))
+@click.argument(
+    "path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=".",
+    required=False,
+)
 @click.option(
     "-e",
     "--extensions",
@@ -91,7 +96,7 @@ def main(
 ) -> None:
     """Code Review Agent - Intelligent code review with incremental support.
 
-    PATH: Directory to review
+    PATH: Directory to review (default: current directory)
 
     Features:
 
