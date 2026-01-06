@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-code-review = "code_review_agent.cli:main"
+code-review-agent = "code_review_agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]
