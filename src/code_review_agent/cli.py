@@ -1,0 +1,161 @@
+"""CLI entry point for Code Review Agent."""
+
+import asyncio
+import sys
+import traceback
+from pathlib import Path
+
+import click
+
+from .agent import CodeReviewAgent
+from .constants import (
+    DEFAULT_CHUNK_LINES,
+    DEFAULT_LARGE_FILE_LINES,
+    DEFAULT_EXTENSIONS,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_RETRY_COUNT,
+    DEFAULT_OUTPUT_DIR,
+)
+
+
+@click.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.option(
+    "-e", "--extensions",
+    default=DEFAULT_EXTENSIONS,
+    help=f"File extensions to review, comma-separated (default: {DEFAULT_EXTENSIONS})"
+)
+@click.option(
+    "-o", "--output-dir",
+    default=DEFAULT_OUTPUT_DIR,
+    help=f"Output directory for reviews (default: {DEFAULT_OUTPUT_DIR})"
+)
+@click.option(
+    "-m", "--max-files",
+    type=int,
+    default=None,
+    help="Maximum number of files to review"
+)
+@click.option(
+    "-c", "--concurrency",
+    type=click.IntRange(min=1),
+    default=DEFAULT_CONCURRENCY,
+    help=f"Number of concurrent review workers (default: {DEFAULT_CONCURRENCY})"
+)
+@click.option(
+    "-r", "--retry",
+    type=click.IntRange(min=0),
+    default=DEFAULT_RETRY_COUNT,
+    help=f"Number of retries on failure (default: {DEFAULT_RETRY_COUNT})"
+)
+@click.option(
+    "--chunk-lines",
+    type=click.IntRange(min=50),
+    default=DEFAULT_CHUNK_LINES,
+    help=f"Lines per chunk for large files (default: {DEFAULT_CHUNK_LINES})"
+)
+@click.option(
+    "--large-file-threshold",
+    type=click.IntRange(min=50),
+    default=DEFAULT_LARGE_FILE_LINES,
+    help=f"Line threshold for chunked review (default: {DEFAULT_LARGE_FILE_LINES})"
+)
+@click.option(
+    "--skip-explore",
+    is_flag=True,
+    help="Skip codebase exploration phase"
+)
+@click.option(
+    "-a", "--agent",
+    type=click.Choice(["claude", "gemini"], case_sensitive=False),
+    default="claude",
+    help="LLM agent to use for code review (default: claude)"
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable debug mode with full stack traces"
+)
+@click.version_option(version="0.2.0", prog_name="code-review")
+def main(
+    path: str,
+    extensions: str,
+    output_dir: str,
+    max_files: int,
+    concurrency: int,
+    retry: int,
+    chunk_lines: int,
+    large_file_threshold: int,
+    skip_explore: bool,
+    agent: str,
+    debug: bool,
+) -> None:
+    """Code Review Agent - Explores codebase and reviews with specific rules.
+
+    PATH: Directory to review
+    """
+    try:
+        # Parse extensions
+        ext_list = [ext.strip() for ext in extensions.split(",") if ext.strip()]
+        if not ext_list:
+            raise click.BadParameter("No valid file extensions provided", param_hint="'-e'")
+
+        # Run async main
+        result = asyncio.run(
+            async_main(
+                path=path,
+                extensions=ext_list,
+                output_dir=output_dir,
+                max_files=max_files,
+                concurrency=concurrency,
+                retry=retry,
+                chunk_lines=chunk_lines,
+                large_file_threshold=large_file_threshold,
+                skip_explore=skip_explore,
+                agent_type=agent,
+            )
+        )
+        sys.exit(0 if result else 1)
+
+    except KeyboardInterrupt:
+        click.echo("\n\nInterrupted by user")
+        sys.exit(130)
+    except click.ClickException:
+        raise
+    except Exception as e:
+        click.echo(f"\nError: {e}", err=True)
+        if debug:
+            traceback.print_exc()
+        sys.exit(1)
+
+
+async def async_main(
+    path: str,
+    extensions: list[str],
+    output_dir: str,
+    max_files: int,
+    concurrency: int,
+    retry: int,
+    chunk_lines: int,
+    large_file_threshold: int,
+    skip_explore: bool,
+    agent_type: str,
+) -> str:
+    """Async main function."""
+    agent = CodeReviewAgent(
+        target_path=path,
+        file_extensions=extensions,
+        output_dir=output_dir,
+        max_files=max_files,
+        concurrency=concurrency,
+        retry_count=retry,
+        chunk_lines=chunk_lines,
+        large_file_threshold=large_file_threshold,
+        skip_explore=skip_explore,
+        agent_type=agent_type,
+    )
+    return await agent.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,190 +1,32 @@
-#!/usr/bin/env python3
-"""
-Code Review Agent using Claude Agent SDK
-
-This agent reviews code files in a directory and generates a comprehensive report.
-Features:
-- Explores codebase first to generate specific review rules
-- Parallel execution with chunked review for large files
-- Incremental save: each file review saved immediately
-- Final summary report generation
-"""
+"""Code Review Agent - Core agent implementation."""
 
 import asyncio
-import argparse
 import json
+import logging
+import os
 import re
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass, field
-from pathspec import PathSpec
-from pathspec.patterns.gitwildmatch import GitWildMatchPattern
 
-from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
-    AssistantMessage,
-    ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-)
+import aiofiles
+
+from .constants import DEFAULT_CHUNK_LINES, DEFAULT_LARGE_FILE_LINES, ENV_VARS_TO_PASS
+from .gitignore import GitignoreParser
+from .llm import create_agent, LLMAgent
+from .progress import ReviewStats, ProgressDisplay
+
+logger = logging.getLogger(__name__)
 
 
-# Constants
-DEFAULT_CHUNK_LINES = 500
-DEFAULT_LARGE_FILE_LINES = 800
-
-
-class GitignoreParser:
-    """Parse .gitignore files using pathspec library with hierarchical support."""
-
-    def __init__(self, root_path: Path):
-        self.root_path = root_path
-        # Map from relative directory path to its PathSpec
-        # Path() represents the root directory's .gitignore
-        self.gitignore_specs: dict[Path, PathSpec] = {}
-        self._scan_all_gitignores()
-
-    def _scan_all_gitignores(self):
-        """Scan and parse all .gitignore files in the directory tree."""
-        # Find root .gitignore
-        root_gitignore = self.root_path / ".gitignore"
-        if root_gitignore.exists():
-            self._parse_gitignore(root_gitignore, Path("."))
-
-        # Find all nested .gitignore files
-        for gitignore_path in self.root_path.rglob(".gitignore"):
-            if gitignore_path == root_gitignore:
-                continue  # Already processed
-
-            rel_dir = gitignore_path.parent.relative_to(self.root_path)
-            self._parse_gitignore(gitignore_path, rel_dir)
-
-    def _parse_gitignore(self, gitignore_path: Path, rel_dir: Path):
-        """Parse a single .gitignore file and store its PathSpec."""
-        try:
-            with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
-                patterns = f.readlines()
-
-            # Filter out empty lines and comments, strip whitespace
-            filtered_patterns = [
-                line.strip() for line in patterns
-                if line.strip() and not line.strip().startswith("#")
-            ]
-
-            if filtered_patterns:
-                spec = PathSpec.from_lines(GitWildMatchPattern, filtered_patterns)
-                self.gitignore_specs[rel_dir] = spec
-        except Exception as e:
-            print(f"  Warning: Failed to parse {gitignore_path}: {e}")
-
-    def is_ignored(self, file_path: Path) -> bool:
-        """Check if a file matches any ignore pattern from hierarchical .gitignore files."""
-        if not self.gitignore_specs:
-            return False
-
-        try:
-            # Get relative path from root
-            rel_path = file_path.relative_to(self.root_path)
-        except ValueError:
-            # File is not under root_path
-            return False
-
-        # Convert to POSIX-style path for pathspec
-        path_str = str(rel_path).replace("\\", "/")
-
-        # Check all .gitignore files from root to the file's directory
-        # Git processes .gitignore files from shallow to deep
-        ignored = False
-        checked_specs = []
-
-        # Sort directories by depth (shallow to deep)
-        sorted_dirs = sorted(
-            self.gitignore_specs.keys(),
-            key=lambda p: len(p.parts)
-        )
-
-        for gitignore_dir in sorted_dirs:
-            # Only check .gitignore files that are ancestors of the file
-            try:
-                if gitignore_dir == Path("."):
-                    # Root .gitignore applies to all files
-                    rel_to_gitignore = path_str
-                else:
-                    # Check if file is under this .gitignore's directory
-                    rel_to_gitignore = rel_path.relative_to(gitignore_dir)
-
-                spec = self.gitignore_specs[gitignore_dir]
-                checked_specs.append(gitignore_dir)
-
-                if spec.match_file(str(rel_to_gitignore).replace("\\", "/")):
-                    ignored = True
-
-            except ValueError:
-                # File is not under this .gitignore's directory
-                continue
-
-        return ignored
-
-
-@dataclass
-class ReviewStats:
-    """Statistics for the review process."""
-    total_files: int = 0
-    completed: int = 0
-    errors: int = 0
-    in_progress: int = 0
-    chunked_files: int = 0
-    start_time: float = field(default_factory=time.time)
-
-    @property
-    def elapsed_seconds(self) -> float:
-        return time.time() - self.start_time
-
-    @property
-    def files_per_second(self) -> float:
-        if self.elapsed_seconds == 0:
-            return 0
-        return self.completed / self.elapsed_seconds
-
-    @property
-    def eta_seconds(self) -> float:
-        if self.files_per_second == 0:
-            return 0
-        remaining = self.total_files - self.completed - self.errors
-        return remaining / self.files_per_second
-
-    def format_time(self, seconds: float) -> str:
-        if seconds < 60:
-            return f"{seconds:.1f}s"
-        elif seconds < 3600:
-            return f"{seconds/60:.1f}m"
-        else:
-            return f"{seconds/3600:.1f}h"
-
-
-class ProgressDisplay:
-    """Thread-safe progress display."""
-
-    def __init__(self, stats: ReviewStats):
-        self.stats = stats
-        self._lock = asyncio.Lock()
-
-    async def update(self, file_path: str, status: str):
-        async with self._lock:
-            progress = (self.stats.completed + self.stats.errors) / self.stats.total_files * 100
-            eta = self.stats.format_time(self.stats.eta_seconds)
-            elapsed = self.stats.format_time(self.stats.elapsed_seconds)
-            print(f"\r[{progress:5.1f}%] {self.stats.completed}/{self.stats.total_files} done | "
-                  f"{self.stats.in_progress} active | "
-                  f"Elapsed: {elapsed} | ETA: {eta} | "
-                  f"{status}: {Path(file_path).name[:30]:<30}", end="", flush=True)
-
-    async def log(self, message: str):
-        async with self._lock:
-            print(f"\n{message}")
+def get_api_env_vars() -> dict[str, str]:
+    """Get API configuration environment variables."""
+    env_vars = {}
+    for var_name in ENV_VARS_TO_PASS:
+        value = os.environ.get(var_name)
+        if value:
+            env_vars[var_name] = value
+    return env_vars
 
 
 class CodeReviewAgent:
@@ -201,6 +43,7 @@ class CodeReviewAgent:
         chunk_lines: int = DEFAULT_CHUNK_LINES,
         large_file_threshold: int = DEFAULT_LARGE_FILE_LINES,
         skip_explore: bool = False,
+        agent_type: str = "claude",
     ):
         self.target_path = Path(target_path).resolve()
         self.file_extensions = file_extensions
@@ -211,13 +54,18 @@ class CodeReviewAgent:
         self.chunk_lines = chunk_lines
         self.large_file_threshold = large_file_threshold
         self.skip_explore = skip_explore
+        self.agent_type = agent_type
         self.reviews: list[dict] = []
         self.codebase_context: str = ""
         self.specific_rules: str = ""
         self.stats = ReviewStats()
         self.progress: Optional[ProgressDisplay] = None
         self._save_lock = asyncio.Lock()
+        self._stats_lock = asyncio.Lock()
         self.gitignore = GitignoreParser(self.target_path)
+
+        # Create LLM agent
+        self.llm_agent: LLMAgent = create_agent(agent_type, env=get_api_env_vars())
 
     async def _explore_codebase(self) -> str:
         """Explore codebase to understand patterns and generate specific rules."""
@@ -261,26 +109,16 @@ class CodeReviewAgent:
 
 请彻底但简洁地完成。专注于有助于代码审查的模式。所有输出使用中文。"""
 
-        options = ClaudeAgentOptions(
-            allowed_tools=["Glob", "Read", "Grep"],
-            system_prompt="你是一名正在分析代码库的高级软件架构师。请彻底且具体。使用中文输出。",
-            cwd=str(self.target_path),
-            permission_mode="bypassPermissions",
-            max_turns=15,
-        )
+        system_prompt = "你是一名正在分析代码库的高级软件架构师。请彻底且具体。使用中文输出。"
 
-        result_parts = []
         try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            result_parts.append(block.text)
-                elif isinstance(message, ResultMessage):
-                    if message.result:
-                        result_parts.append(message.result)
-
-            result = "\n".join(result_parts)
+            result = await self.llm_agent.query(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                allowed_tools=["Glob", "Read", "Grep"],
+                cwd=str(self.target_path),
+                max_turns=15,
+            )
 
             # Extract JSON from result
             json_match = re.search(r'\{[\s\S]*\}', result)
@@ -374,21 +212,41 @@ class CodeReviewAgent:
         print(f"  找到 {len(files)} 个待审查文件（已应用 .gitignore 过滤）")
         return files
 
-    def _read_file_lines(self, file_path: str) -> list[str]:
+    async def _read_file_lines(self, file_path: str) -> list[str]:
+        """Read file lines using async I/O.
+
+        Args:
+            file_path: Path to the file to read
+
+        Returns:
+            List of lines from the file
+
+        Raises:
+            IOError: If file cannot be read (permission denied, not found, etc.)
+        """
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                return f.readlines()
-        except Exception:
-            return []
+            async with aiofiles.open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = await f.read()
+                return content.splitlines(keepends=True)
+        except PermissionError as e:
+            logger.warning(f"Permission denied reading file {file_path}: {e}")
+            raise IOError(f"Permission denied: {file_path}") from e
+        except FileNotFoundError as e:
+            logger.warning(f"File not found: {file_path}")
+            raise IOError(f"File not found: {file_path}") from e
+        except OSError as e:
+            logger.warning(f"OS error reading file {file_path}: {e}")
+            raise IOError(f"Cannot read file {file_path}: {e}") from e
 
     async def _save_review(self, review: dict):
-        """Save individual review to file immediately."""
+        """Save individual review to file immediately using async I/O."""
         async with self._save_lock:
             # Create output directory if not exists
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Generate filename from file path
-            safe_name = review["file"].replace("/", "_").replace("\\", "_")
+            # Generate safe filename from file path (prevent path traversal)
+            file_path = Path(review["file"])
+            safe_name = str(file_path.as_posix()).replace("/", "_").replace("..", "_")
             output_file = self.output_dir / f"{safe_name}.md"
 
             content = f"""# 代码审查：{review['file']}
@@ -402,8 +260,8 @@ class CodeReviewAgent:
 
 {review['review']}
 """
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(content)
+            async with aiofiles.open(output_file, "w", encoding="utf-8") as f:
+                await f.write(content)
 
     async def _review_chunk(
         self,
@@ -422,26 +280,15 @@ class CodeReviewAgent:
 
 仅列出此代码块中发现的严重问题。请非常简洁。"""
 
-        options = ClaudeAgentOptions(
-            allowed_tools=[],
-            system_prompt=self._get_chunk_system_prompt(),
-            cwd=str(self.target_path),
-            permission_mode="bypassPermissions",
-            max_turns=2,
-        )
-
-        review_parts = []
         try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            review_parts.append(block.text)
-                elif isinstance(message, ResultMessage):
-                    if message.result:
-                        review_parts.append(message.result)
-
-            return f"### 代码块 {chunk_num}（第 {start_line}-{end_line} 行）\n" + "\n".join(review_parts)
+            result = await self.llm_agent.query(
+                prompt=prompt,
+                system_prompt=self._get_chunk_system_prompt(),
+                allowed_tools=[],
+                cwd=str(self.target_path),
+                max_turns=2,
+            )
+            return f"### 代码块 {chunk_num}（第 {start_line}-{end_line} 行）\n" + result
         except Exception as e:
             return f"### 代码块 {chunk_num}（第 {start_line}-{end_line} 行）\n错误：{str(e)}"
 
@@ -455,34 +302,28 @@ class CodeReviewAgent:
 
 请提供统一的审查，包括总体评分、总结和合并的问题列表。使用中文输出。"""
 
-        options = ClaudeAgentOptions(
-            allowed_tools=[],
-            system_prompt="合并代码块审查。提供：评分 X/5、总结、问题列表、建议。使用中文输出。",
-            cwd=str(self.target_path),
-            permission_mode="bypassPermissions",
-            max_turns=2,
-        )
+        system_prompt = "合并代码块审查。提供：评分 X/5、总结、问题列表、建议。使用中文输出。"
 
-        review_parts = []
         try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            review_parts.append(block.text)
-                elif isinstance(message, ResultMessage):
-                    if message.result:
-                        review_parts.append(message.result)
-
-            return "\n".join(review_parts)
+            result = await self.llm_agent.query(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                allowed_tools=[],
+                cwd=str(self.target_path),
+                max_turns=2,
+            )
+            return result
         except Exception as e:
             return f"## Chunked Review (merge failed: {e})\n\n{combined}"
 
     async def _review_large_file_chunked(self, file_path: str) -> str:
         """Review a large file by splitting into chunks."""
-        lines = self._read_file_lines(file_path)
+        try:
+            lines = await self._read_file_lines(file_path)
+        except IOError as e:
+            return f"Error: {e}"
         if not lines:
-            return "Error: Could not read file"
+            return "Error: File is empty"
 
         total_lines = len(lines)
         chunks = []
@@ -515,33 +356,20 @@ class CodeReviewAgent:
 
 请阅读文件并提供您的审查。仅关注严重问题。请简洁。使用中文输出。"""
 
-        options = ClaudeAgentOptions(
-            allowed_tools=["Read"],
-            system_prompt=self._get_system_prompt(),
-            cwd=str(self.target_path),
-            permission_mode="bypassPermissions",
-            max_turns=5,
-        )
-
-        review_content = []
-
         for attempt in range(self.retry_count + 1):
             try:
-                async for message in query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                review_content.append(block.text)
-                    elif isinstance(message, ResultMessage):
-                        if message.result:
-                            review_content.append(message.result)
-
-                return self._extract_final_review("\n".join(review_content))
+                result = await self.llm_agent.query(
+                    prompt=prompt,
+                    system_prompt=self._get_system_prompt(),
+                    allowed_tools=["Read"],
+                    cwd=str(self.target_path),
+                    max_turns=5,
+                )
+                return self._extract_final_review(result)
 
             except Exception as e:
                 if attempt < self.retry_count:
                     await asyncio.sleep(2 ** attempt)
-                    review_content = []
                     continue
                 raise
 
@@ -574,16 +402,41 @@ class CodeReviewAgent:
         lines = [line for line in result.strip().split("\n") if line.strip()]
         return "\n".join(lines) if lines else result.strip()
 
+    async def _update_stats(self, in_progress_delta: int = 0, completed_delta: int = 0, errors_delta: int = 0):
+        """Thread-safe stats update."""
+        async with self._stats_lock:
+            self.stats.in_progress += in_progress_delta
+            self.stats.completed += completed_delta
+            self.stats.errors += errors_delta
+
     async def _review_single_file(self, file_path: str, semaphore: asyncio.Semaphore) -> dict:
         """Review a single file and save immediately."""
         async with semaphore:
-            self.stats.in_progress += 1
+            await self._update_stats(in_progress_delta=1)
             relative_path = Path(file_path).relative_to(self.target_path)
 
             if self.progress:
                 await self.progress.update(file_path, "Reviewing")
 
-            lines = self._read_file_lines(file_path)
+            # Try to read file lines
+            try:
+                lines = await self._read_file_lines(file_path)
+            except IOError as e:
+                await self._update_stats(in_progress_delta=-1, errors_delta=1)
+                if self.progress:
+                    await self.progress.log(f"Cannot read {relative_path}: {e}")
+                review = {
+                    "file": str(relative_path),
+                    "full_path": file_path,
+                    "review": f"Error: {e}",
+                    "status": "error",
+                    "chunked": False,
+                    "lines": 0,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                await self._save_review(review)
+                return review
+
             is_large_file = len(lines) > self.large_file_threshold
 
             try:
@@ -594,8 +447,7 @@ class CodeReviewAgent:
                 else:
                     review_text = await self._review_normal_file(file_path)
 
-                self.stats.in_progress -= 1
-                self.stats.completed += 1
+                await self._update_stats(in_progress_delta=-1, completed_delta=1)
 
                 review = {
                     "file": str(relative_path),
@@ -616,8 +468,7 @@ class CodeReviewAgent:
                 return review
 
             except Exception as e:
-                self.stats.in_progress -= 1
-                self.stats.errors += 1
+                await self._update_stats(in_progress_delta=-1, errors_delta=1)
 
                 if self.progress:
                     await self.progress.log(f"Error reviewing {relative_path}: {e}")
@@ -640,7 +491,7 @@ class CodeReviewAgent:
         semaphore = asyncio.Semaphore(self.concurrency)
 
         self.stats.total_files = len(files)
-        self.stats.start_time = time.time()
+        self.stats.start_time = __import__("time").time()
         self.progress = ProgressDisplay(self.stats)
 
         print(f"\n[阶段 3] 正在审查 {len(files)} 个文件，使用 {self.concurrency} 个工作线程...")
@@ -699,25 +550,17 @@ class CodeReviewAgent:
 使用中文输出。
 """
 
-        options = ClaudeAgentOptions(
-            allowed_tools=[],
-            system_prompt="你是一名高级架构师。请简洁地总结代码审查结果。使用中文输出。",
-            permission_mode="bypassPermissions",
-            max_turns=2,
-        )
+        system_prompt = "你是一名高级架构师。请简洁地总结代码审查结果。使用中文输出。"
 
-        summary_parts = []
         try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            summary_parts.append(block.text)
-                elif isinstance(message, ResultMessage):
-                    if message.result:
-                        summary_parts.append(message.result)
-
-            return "\n".join(summary_parts)
+            result = await self.llm_agent.query(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                allowed_tools=[],
+                cwd=str(self.target_path),
+                max_turns=2,
+            )
+            return result
         except Exception as e:
             return f"Error generating summary: {str(e)}"
 
@@ -726,13 +569,19 @@ class CodeReviewAgent:
         elapsed = self.stats.format_time(self.stats.elapsed_seconds)
         completed = sum(1 for r in self.reviews if r["status"] == "completed")
         errors = sum(1 for r in self.reviews if r["status"] == "error")
+        total_reviews = len(self.reviews)
+
+        # Prevent division by zero
+        success_rate = (completed / total_reviews * 100) if total_reviews > 0 else 0
+        avg_time_per_file = (self.stats.elapsed_seconds / total_reviews) if total_reviews > 0 else 0
 
         report = f"""# 代码审查摘要报告
 
 **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 **目标目录**：`{self.target_path}`
-**审查文件数**：{len(self.reviews)}
+**审查文件数**：{total_reviews}
 **文件类型**：{', '.join(self.file_extensions)}
+**使用 Agent**：{self.llm_agent.name}
 **并发数**：{self.concurrency} 个工作线程
 **总耗时**：{elapsed}
 **吞吐量**：{self.stats.files_per_second:.2f} 文件/秒
@@ -757,13 +606,13 @@ class CodeReviewAgent:
 
 | 指标 | 值 |
 |------|-----|
-| 总文件数 | {len(self.reviews)} |
+| 总文件数 | {total_reviews} |
 | 成功审查 | {completed} |
 | 错误 | {errors} |
 | 分块文件 | {self.stats.chunked_files} |
-| 成功率 | {completed/len(self.reviews)*100:.1f}% |
+| 成功率 | {success_rate:.1f}% |
 | 总耗时 | {elapsed} |
-| 平均每文件耗时 | {self.stats.elapsed_seconds/len(self.reviews):.2f}秒 |
+| 平均每文件耗时 | {avg_time_per_file:.2f}秒 |
 
 ---
 
@@ -806,12 +655,12 @@ class CodeReviewAgent:
         # Phase 4: Generate summary
         summary = await self._generate_summary()
 
-        # Phase 5: Save final report
+        # Phase 5: Save final report using async I/O
         report = self._generate_final_report(summary)
         report_path = self.output_dir / "SUMMARY.md"
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(report)
+        async with aiofiles.open(report_path, "w", encoding="utf-8") as f:
+            await f.write(report)
 
         print("\n" + "=" * 60)
         print("审查完成！")
@@ -824,63 +673,3 @@ class CodeReviewAgent:
         print("=" * 60)
 
         return str(report_path)
-
-
-async def main():
-    parser = argparse.ArgumentParser(
-        description="Code Review Agent - Explores codebase and reviews with specific rules"
-    )
-    parser.add_argument("path", type=str, help="Path to the directory to review")
-    parser.add_argument(
-        "-e", "--extensions", type=str, default="py,go,js,ts,java,cpp,c,h",
-        help="File extensions to review (default: py,go,js,ts,java,cpp,c,h)"
-    )
-    parser.add_argument(
-        "-o", "--output-dir", type=str, default="reviews",
-        help="Output directory for reviews (default: reviews)"
-    )
-    parser.add_argument(
-        "-m", "--max-files", type=int, default=None,
-        help="Maximum number of files to review"
-    )
-    parser.add_argument(
-        "-c", "--concurrency", type=int, default=5,
-        help="Number of concurrent review workers (default: 5)"
-    )
-    parser.add_argument(
-        "-r", "--retry", type=int, default=2,
-        help="Number of retries on failure (default: 2)"
-    )
-    parser.add_argument(
-        "--chunk-lines", type=int, default=DEFAULT_CHUNK_LINES,
-        help=f"Lines per chunk for large files (default: {DEFAULT_CHUNK_LINES})"
-    )
-    parser.add_argument(
-        "--large-file-threshold", type=int, default=DEFAULT_LARGE_FILE_LINES,
-        help=f"Line threshold for chunked review (default: {DEFAULT_LARGE_FILE_LINES})"
-    )
-    parser.add_argument(
-        "--skip-explore", action="store_true",
-        help="Skip codebase exploration phase"
-    )
-
-    args = parser.parse_args()
-    extensions = [ext.strip() for ext in args.extensions.split(",")]
-
-    agent = CodeReviewAgent(
-        target_path=args.path,
-        file_extensions=extensions,
-        output_dir=args.output_dir,
-        max_files=args.max_files,
-        concurrency=args.concurrency,
-        retry_count=args.retry,
-        chunk_lines=args.chunk_lines,
-        large_file_threshold=args.large_file_threshold,
-        skip_explore=args.skip_explore,
-    )
-
-    await agent.run()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
