@@ -8,6 +8,7 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       contents: write
       id-token: write
@@ -36,7 +37,4 @@ jobs:
           generate_release_notes: true
 
       - name: Publish to PyPI
-        if: github.repository == 'your-org/code-review-agent'
-        run: uv publish
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish --trusted-publishing always
