@@ -272,17 +272,17 @@ class CodeReviewAgent:
         skipped_count = 0
 
         for file_path in all_files:
-            should_review, reason = self.state_manager.should_review_file(
+            should_review, reason, content_hash = self.state_manager.should_review_file(
                 file_path, force=self.force_full
             )
             if should_review:
                 files_to_review.append(str(file_path))
-                # Register file in state
+                # Register file in state, reusing the already computed hash
                 try:
                     lines = len(file_path.read_text(encoding="utf-8", errors="replace").splitlines())
                 except Exception:
                     lines = 0
-                self.state_manager.register_file(file_path, lines)
+                self.state_manager.register_file(file_path, lines, content_hash)
             else:
                 skipped_count += 1
                 self.state_manager.mark_skipped(file_path)
@@ -401,7 +401,10 @@ class CodeReviewAgent:
             return f"## Chunked Review (merge failed: {e})\n\n{combined}"
 
     async def _review_large_file_chunked(self, file_path: str) -> str:
-        """Review a large file by splitting into chunks."""
+        """Review a large file by splitting into chunks.
+
+        Chunks are reviewed in parallel with a semaphore to limit concurrency.
+        """
         try:
             lines = await self._read_file_lines(file_path)
         except IOError as e:
@@ -421,10 +424,28 @@ class CodeReviewAgent:
         if self.progress:
             await self.progress.log(f"  Large file ({total_lines} lines) -> {len(chunks)} chunks")
 
+        # Use semaphore to limit concurrent chunk reviews (max 3 concurrent chunks)
+        chunk_semaphore = asyncio.Semaphore(min(3, self.concurrency))
+
+        async def review_chunk_with_semaphore(idx: int, content: str, start: int, end: int) -> tuple[int, str]:
+            async with chunk_semaphore:
+                review = await self._review_chunk(file_path, content, idx, start, end)
+                return (idx, review)
+
+        # Review chunks in parallel
+        tasks = [
+            review_chunk_with_semaphore(idx, content, start, end)
+            for idx, (content, start, end) in enumerate(chunks, 1)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Sort by chunk index and collect reviews, handling errors
         chunk_reviews = []
-        for idx, (content, start, end) in enumerate(chunks, 1):
-            review = await self._review_chunk(file_path, content, idx, start, end)
-            chunk_reviews.append(review)
+        for result in sorted(results, key=lambda x: x[0] if isinstance(x, tuple) else float('inf')):
+            if isinstance(result, tuple):
+                chunk_reviews.append(result[1])
+            elif isinstance(result, Exception):
+                chunk_reviews.append(f"Error reviewing chunk: {result}")
 
         if len(chunk_reviews) > 1:
             final_review = await self._merge_chunk_reviews(file_path, chunk_reviews)

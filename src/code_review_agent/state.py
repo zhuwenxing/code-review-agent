@@ -80,10 +80,17 @@ class ReviewStateManager:
         self.state: Optional[ReviewSessionState] = None
 
     def _compute_file_hash(self, file_path: Path) -> str:
-        """Compute SHA256 hash of file content."""
+        """Compute SHA256 hash of file content using chunked reading.
+
+        Reads file in 64KB chunks to avoid memory issues with large files.
+        """
         try:
+            sha256_hash = hashlib.sha256()
             with open(file_path, "rb") as f:
-                return hashlib.sha256(f.read()).hexdigest()
+                # Read in 64KB chunks to avoid loading entire file into memory
+                while chunk := f.read(65536):
+                    sha256_hash.update(chunk)
+            return sha256_hash.hexdigest()
         except Exception as e:
             logger.warning(f"Failed to hash {file_path}: {e}")
             return ""
@@ -136,7 +143,7 @@ class ReviewStateManager:
         )
         return self.state
 
-    def should_review_file(self, file_path: Path, force: bool = False) -> tuple[bool, str]:
+    def should_review_file(self, file_path: Path, force: bool = False) -> tuple[bool, str, str]:
         """Check if a file should be reviewed.
 
         Args:
@@ -144,45 +151,57 @@ class ReviewStateManager:
             force: If True, always review regardless of state
 
         Returns:
-            Tuple of (should_review, reason)
+            Tuple of (should_review, reason, content_hash)
+            The content_hash can be reused by register_file to avoid duplicate I/O.
         """
         if force:
-            return True, "forced"
+            current_hash = self._compute_file_hash(file_path)
+            return True, "forced", current_hash
 
         if not self.state:
-            return True, "no_state"
+            current_hash = self._compute_file_hash(file_path)
+            return True, "no_state", current_hash
 
         rel_path = str(file_path.relative_to(self.root_path))
         current_hash = self._compute_file_hash(file_path)
 
         if rel_path not in self.state.files:
-            return True, "new_file"
+            return True, "new_file", current_hash
 
         file_state = self.state.files[rel_path]
 
         # Check if file content changed
         if file_state.content_hash != current_hash:
-            return True, "content_changed"
+            return True, "content_changed", current_hash
 
         # Check if previous review was successful
         if file_state.status == "completed":
-            return False, "unchanged"
+            return False, "unchanged", current_hash
 
         if file_state.status == "error":
-            return True, "retry_error"
+            return True, "retry_error", current_hash
 
         if file_state.status == "in_progress":
-            return True, "incomplete"
+            return True, "incomplete", current_hash
 
-        return True, "unknown_status"
+        return True, "unknown_status", current_hash
 
-    def register_file(self, file_path: Path, lines: int = 0):
-        """Register a file for review."""
+    def register_file(self, file_path: Path, lines: int = 0, content_hash: str = ""):
+        """Register a file for review.
+
+        Args:
+            file_path: Absolute path to the file
+            lines: Number of lines in the file
+            content_hash: Pre-computed content hash (to avoid duplicate I/O).
+                         If empty, hash will be computed.
+        """
         if not self.state:
             return
 
         rel_path = str(file_path.relative_to(self.root_path))
-        content_hash = self._compute_file_hash(file_path)
+        # Reuse provided hash or compute if not provided
+        if not content_hash:
+            content_hash = self._compute_file_hash(file_path)
 
         self.state.files[rel_path] = FileReviewState(
             file_path=rel_path,

@@ -1,5 +1,6 @@
 """Claude Agent implementation using claude_agent_sdk."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -12,6 +13,7 @@ from claude_agent_sdk import (
 )
 
 from .base import LLMAgent
+from ..constants import DEFAULT_LLM_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ class ClaudeAgent(LLMAgent):
         allowed_tools: Optional[list[str]] = None,
         cwd: str = ".",
         max_turns: int = 10,
+        timeout: Optional[int] = None,
     ) -> str:
         """Query Claude and return the text response.
 
@@ -60,10 +63,15 @@ class ClaudeAgent(LLMAgent):
             allowed_tools: List of allowed tool names
             cwd: Working directory for tool execution
             max_turns: Maximum number of conversation turns
+            timeout: Timeout in seconds (defaults to DEFAULT_LLM_TIMEOUT)
 
         Returns:
             The text response from Claude
+
+        Raises:
+            RuntimeError: If the query fails or times out
         """
+        timeout = timeout or DEFAULT_LLM_TIMEOUT
         permission_mode = "bypassPermissions" if self._auto_approve else "default"
         options = ClaudeAgentOptions(
             allowed_tools=allowed_tools or [],
@@ -74,16 +82,27 @@ class ClaudeAgent(LLMAgent):
             env=self._env,
         )
 
-        result_parts = []
+        result_parts: list[str] = []
         try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            result_parts.append(block.text)
-                elif isinstance(message, ResultMessage):
-                    if message.result:
-                        result_parts.append(message.result)
+            # Use asyncio.wait_for to add timeout
+            async def _query():
+                async for message in query(prompt=prompt, options=options):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                result_parts.append(block.text)
+                    elif isinstance(message, ResultMessage):
+                        # Type-safe handling: ensure result is converted to string
+                        if message.result is not None:
+                            result_parts.append(str(message.result))
+
+            await asyncio.wait_for(_query(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.error(f"Claude query timed out after {timeout}s")
+            raise RuntimeError(f"Claude query timed out after {timeout} seconds")
+        except asyncio.CancelledError:
+            logger.warning("Claude query was cancelled")
+            raise
         except Exception as e:
             logger.error(f"Claude SDK error: {e}")
             raise RuntimeError(f"Claude query failed: {e}") from e

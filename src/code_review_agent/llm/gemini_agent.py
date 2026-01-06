@@ -8,6 +8,7 @@ import shutil
 from typing import Optional
 
 from .base import LLMAgent
+from ..constants import DEFAULT_LLM_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class GeminiAgent(LLMAgent):
         allowed_tools: Optional[list[str]] = None,
         cwd: str = ".",
         max_turns: int = 10,
+        timeout: Optional[int] = None,
     ) -> str:
         """Query Gemini CLI and return the text response.
 
@@ -67,14 +69,21 @@ class GeminiAgent(LLMAgent):
             allowed_tools: List of allowed tool names (currently not supported by Gemini CLI)
             cwd: Working directory for tool execution
             max_turns: Maximum number of conversation turns (currently not supported by Gemini CLI)
+            timeout: Timeout in seconds (defaults to DEFAULT_LLM_TIMEOUT)
 
         Returns:
             The text response from Gemini
+
+        Raises:
+            RuntimeError: If CLI execution fails or times out
+            asyncio.TimeoutError: If the query exceeds the timeout
 
         Note:
             allowed_tools and max_turns parameters are accepted for interface
             compatibility but are not currently supported by the Gemini CLI.
         """
+        timeout = timeout or DEFAULT_LLM_TIMEOUT
+
         # Warn about ignored parameters
         if allowed_tools:
             logger.debug(
@@ -106,7 +115,8 @@ class GeminiAgent(LLMAgent):
         subprocess_env = os.environ.copy()
         subprocess_env.update(self._env)
 
-        # Run subprocess asynchronously
+        # Run subprocess asynchronously with proper cleanup
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -115,9 +125,25 @@ class GeminiAgent(LLMAgent):
                 stderr=asyncio.subprocess.PIPE,
                 env=subprocess_env,
             )
-            stdout, stderr = await proc.communicate()
+            # Use asyncio.wait_for to add timeout
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Gemini CLI timed out after {timeout}s")
+            if proc:
+                await self._terminate_process(proc)
+            raise RuntimeError(f"Gemini CLI timed out after {timeout} seconds")
+        except asyncio.CancelledError:
+            logger.warning("Gemini CLI query was cancelled")
+            if proc:
+                await self._terminate_process(proc)
+            raise
         except Exception as e:
             logger.error(f"Failed to execute Gemini CLI: {e}")
+            if proc:
+                await self._terminate_process(proc)
             raise RuntimeError(f"Gemini CLI execution failed: {e}") from e
 
         if proc.returncode != 0:
@@ -130,5 +156,30 @@ class GeminiAgent(LLMAgent):
             result = json.loads(stdout.decode())
             return result.get("response", "")
         except json.JSONDecodeError:
-            # If not JSON, return raw output
+            # If not JSON, return raw output but log a warning
+            logger.warning("Gemini CLI returned non-JSON response, returning raw output")
             return stdout.decode()
+
+    async def _terminate_process(self, proc: asyncio.subprocess.Process) -> None:
+        """Safely terminate a subprocess.
+
+        Attempts graceful termination first, then forces kill if needed.
+        """
+        if proc.returncode is not None:
+            return  # Process already finished
+
+        try:
+            proc.terminate()
+            # Give it a short time to terminate gracefully
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                # Force kill if terminate didn't work
+                logger.warning("Process did not terminate, forcing kill")
+                proc.kill()
+                await proc.wait()
+        except ProcessLookupError:
+            # Process already gone
+            pass
+        except Exception as e:
+            logger.warning(f"Error terminating process: {e}")

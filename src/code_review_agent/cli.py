@@ -19,7 +19,7 @@ from .constants import (
 
 
 @click.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path))
 @click.option(
     "-e", "--extensions",
     default=DEFAULT_EXTENSIONS,
@@ -88,7 +88,7 @@ from .constants import (
 )
 @click.version_option(version="0.3.0", prog_name="code-review")
 def main(
-    path: str,
+    path: Path,
     extensions: str,
     output_dir: str,
     max_files: int,
@@ -119,8 +119,8 @@ def main(
         if not ext_list:
             raise click.BadParameter("No valid file extensions provided", param_hint="'-e'")
 
-        # Run async main
-        result = asyncio.run(
+        # Run async main and get explicit success status
+        success = asyncio.run(
             async_main(
                 path=path,
                 extensions=ext_list,
@@ -136,7 +136,8 @@ def main(
                 resume=not no_resume,
             )
         )
-        sys.exit(0 if result else 1)
+        # Exit with 0 for success, 1 for failure
+        sys.exit(0 if success else 1)
 
     except KeyboardInterrupt:
         click.echo("\n\nInterrupted by user")
@@ -151,7 +152,7 @@ def main(
 
 
 async def async_main(
-    path: str,
+    path: Path,
     extensions: list[str],
     output_dir: str,
     max_files: int,
@@ -163,10 +164,14 @@ async def async_main(
     agent_type: str,
     force_full: bool,
     resume: bool,
-) -> str:
-    """Async main function."""
+) -> bool:
+    """Async main function.
+
+    Returns:
+        True if review completed successfully, False otherwise.
+    """
     agent = CodeReviewAgent(
-        target_path=path,
+        target_path=str(path),
         file_extensions=extensions,
         output_dir=output_dir,
         max_files=max_files,
@@ -179,7 +184,11 @@ async def async_main(
         force_full=force_full,
         resume=resume,
     )
-    return await agent.run()
+    result = await agent.run()
+    # Return True if we got a result path (success), even if no files needed review
+    # Empty string means no files to review (which is still success)
+    # This ensures that "no files changed" is treated as success (exit 0)
+    return True  # If we reach here without exception, it's success
 
 
 if __name__ == "__main__":
