@@ -14,7 +14,7 @@ from .llm import ClaudeAgent, GeminiAgent, LLMAgent, create_agent
 from .progress import ProgressDisplay, ReviewStats
 from .state import FileReviewState, ReviewSessionState, ReviewStateManager
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "CodeReviewAgent",
     "GitignoreParser",
