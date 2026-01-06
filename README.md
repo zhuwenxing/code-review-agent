@@ -128,7 +128,7 @@ reviews/
 **审查时间**：2026-01-06T10:30:00
 **行数**：150
 **分块**：否
-**状态**：已完成
+**状态**：completed
 
 ---
 
@@ -291,7 +291,7 @@ Implemented using `pathspec` library, matching Git's behavior exactly.
 **Reviewed at**: 2026-01-06T10:30:00
 **Lines**: 150
 **Chunked**: No
-**Status**: Completed
+**Status**: completed
 
 ---
 
