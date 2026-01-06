@@ -75,7 +75,7 @@ jobs:
       - name: Verify CLI entry point
         run: |
           uv pip install -e .
-          uv run code-review --help
+          uv run code-review-agent --help
 
   test:
     runs-on: ubuntu-latest

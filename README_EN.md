@@ -35,11 +35,14 @@ uv pip install -e .
 ### Basic Usage
 
 ```bash
-# Review a directory (using Claude, default)
-code-review /path/to/your/code
+# Review current directory (using Gemini, default)
+code-review-agent
 
-# Use Gemini for review
-code-review /path/to/your/code --agent gemini
+# Review a specific directory
+code-review-agent /path/to/your/code
+
+# Use Claude for review
+code-review-agent --agent claude
 ```
 
 ### Incremental Reviews
@@ -47,20 +50,20 @@ code-review /path/to/your/code --agent gemini
 Incremental review mode is enabled by default, only reviewing files changed since the last run:
 
 ```bash
-# Normal run (automatic incremental review)
-code-review /path/to/code
+# Normal run (automatic incremental review of the current directory)
+code-review-agent
 
-# Force full review (ignore previous state)
-code-review /path/to/code --force-full
+# Force full review (ignore previous state, can be used with a path)
+code-review-agent --force-full
 
-# Disable session resume
-code-review /path/to/code --no-resume
+# Disable session resume (can be used with a path)
+code-review-agent --no-resume
 ```
 
 ### Advanced Options
 
 ```bash
-code-review /path/to/code \
+code-review-agent /path/to/code \
   --agent claude \
   --extensions py,go,js,ts \
   --output-dir reviews \
@@ -74,8 +77,8 @@ code-review /path/to/code \
 
 | Parameter | Short | Default | Description |
 |----------|-------|---------|-------------|
-| `path` | - | - | Path to the directory to review (required) |
-| `--agent` | `-a` | `claude` | LLM engine: `claude` or `gemini` |
+| `path` | - | current directory | Path to the directory to review |
+| `--agent` | `-a` | `gemini` | LLM engine: `claude` or `gemini` |
 | `--extensions` | `-e` | `py,go,js,ts,java,cpp,c,h` | File extensions to review |
 | `--output-dir` | `-o` | `reviews` | Output directory for reviews |
 | `--max-files` | `-m` | unlimited | Maximum number of files to review |
