@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+.vscode/
+
+# Test directories and generated reports
+test_code/
+test_large/
+reviews/
+*.md
+!README.md
+
